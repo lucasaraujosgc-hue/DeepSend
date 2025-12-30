@@ -23,6 +23,26 @@ export const api = {
     await fetch(`${API_URL}/companies/${id}`, { method: 'DELETE' });
   },
 
+  // Tasks (Kanban)
+  getTasks: async (): Promise<Task[]> => {
+    const res = await fetch(`${API_URL}/tasks`);
+    if (!res.ok) throw new Error('Failed to fetch tasks');
+    return res.json();
+  },
+
+  saveTask: async (task: Partial<Task>): Promise<{ success: boolean; id: number }> => {
+    const res = await fetch(`${API_URL}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(task),
+    });
+    return res.json();
+  },
+
+  deleteTask: async (id: number): Promise<void> => {
+    await fetch(`${API_URL}/tasks/${id}`, { method: 'DELETE' });
+  },
+
   // Document Status
   getDocumentStatuses: async (competence: string): Promise<any[]> => {
     const res = await fetch(`${API_URL}/documents/status?competence=${competence}`);

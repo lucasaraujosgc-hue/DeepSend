@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
-import { Plus, MoreHorizontal, Calendar, Flag, Trash, CheckSquare, X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Plus, MoreHorizontal, Calendar, Flag, Trash, CheckSquare, X, Loader2 } from 'lucide-react';
 import { Task, TaskStatus } from '../types';
-import { MOCK_TASKS } from '../constants';
 import TaskModal from './TaskModal';
+import { api } from '../services/api';
 
 interface KanbanColumnProps { 
   title: string; 
@@ -167,7 +167,8 @@ const KanbanColumn: React.FC<KanbanColumnProps> = ({
 };
 
 const Kanban: React.FC = () => {
-  const [tasks, setTasks] = useState<Task[]>(MOCK_TASKS);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   
@@ -176,11 +177,36 @@ const Kanban: React.FC = () => {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedTasks, setSelectedTasks] = useState<number[]>([]);
 
-  // Close menus when clicking outside (simple simulation via backdrop if needed, but handled locally)
-  // For simplicity, we just rely on the toggle logic in the column.
+  // Load Tasks
+  const loadTasks = async () => {
+    try {
+      const data = await api.getTasks();
+      setTasks(data);
+    } catch (e) {
+      console.error("Erro ao carregar tarefas", e);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  const moveTask = (id: number, newStatus: TaskStatus) => {
+  useEffect(() => {
+    loadTasks();
+  }, []);
+
+  const moveTask = async (id: number, newStatus: TaskStatus) => {
+    // Optimistic Update
+    const originalTasks = [...tasks];
     setTasks(prev => prev.map(t => t.id === id ? { ...t, status: newStatus } : t));
+
+    try {
+      const task = tasks.find(t => t.id === id);
+      if (task) {
+         await api.saveTask({ ...task, status: newStatus });
+      }
+    } catch (e) {
+      console.error("Falha ao mover tarefa", e);
+      setTasks(originalTasks); // Revert
+    }
   };
 
   const handleEditTask = (task: Task | null) => {
@@ -188,23 +214,33 @@ const Kanban: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleSaveTask = (task: Task) => {
-    if (editingTask) {
-        setTasks(prev => prev.map(t => t.id === task.id ? task : t));
-    } else {
-        setTasks(prev => [...prev, task]);
+  const handleSaveTask = async (task: Task) => {
+    try {
+      await api.saveTask(task);
+      setIsModalOpen(false);
+      loadTasks(); // Reload to get IDs/Updates
+    } catch (e) {
+      alert("Erro ao salvar tarefa");
     }
-    setIsModalOpen(false);
   };
 
-  const handleDeleteTask = (taskId: number) => {
+  const handleDeleteTask = async (taskId: number) => {
+    try {
+      await api.deleteTask(taskId);
       setTasks(prev => prev.filter(t => t.id !== taskId));
+    } catch (e) {
+      alert("Erro ao excluir tarefa");
+    }
   };
 
   // Bulk Actions
-  const handleClearColumn = (status: TaskStatus) => {
+  const handleClearColumn = async (status: TaskStatus) => {
       if(window.confirm(`Tem certeza que deseja excluir TODAS as tarefas da coluna "${status}"?`)) {
-          setTasks(prev => prev.filter(t => t.status !== status));
+          const tasksToDelete = tasks.filter(t => t.status === status);
+          for (const t of tasksToDelete) {
+             await api.deleteTask(t.id);
+          }
+          loadTasks();
       }
   };
 
@@ -214,12 +250,15 @@ const Kanban: React.FC = () => {
       );
   };
 
-  const handleBulkDelete = () => {
+  const handleBulkDelete = async () => {
       if(selectedTasks.length === 0) return;
       if(window.confirm(`Excluir as ${selectedTasks.length} tarefas selecionadas?`)) {
-          setTasks(prev => prev.filter(t => !selectedTasks.includes(t.id)));
+          for (const id of selectedTasks) {
+             await api.deleteTask(id);
+          }
           setSelectedTasks([]);
           setSelectionMode(false);
+          loadTasks();
       }
   };
 
@@ -227,6 +266,10 @@ const Kanban: React.FC = () => {
       setSelectionMode(false);
       setSelectedTasks([]);
   };
+
+  if (loading) {
+     return <div className="h-[800px] flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
+  }
 
   return (
     <div className="h-[800px] flex flex-col relative" onClick={() => setActiveMenuColumn(null)}>
@@ -238,8 +281,7 @@ const Kanban: React.FC = () => {
         <div className="flex gap-3">
           <select className="bg-white border border-gray-300 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
             <option>Todas as Empresas</option>
-            <option>Tech Solutions</option>
-            <option>Padaria do João</option>
+            {/* Can populate dynamically if needed */}
           </select>
           <button 
             onClick={() => handleEditTask(null)}

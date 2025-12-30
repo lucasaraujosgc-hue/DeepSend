@@ -1,4 +1,3 @@
-import './polyfill.js';
 import 'dotenv/config';
 import express from 'express';
 import { createRequire } from 'module';
@@ -10,9 +9,6 @@ import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth } = pkg;
 import QRCode from 'qrcode';
 import fs from 'fs';
-import { GoogleGenAI } from "@google/genai";
-import { Groq } from 'groq-sdk';
-import multer from 'multer';
 import sqlite3 from 'sqlite3';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -20,14 +16,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
+// Configuração de diretórios para persistência no Docker
 const DATA_DIR = process.env.DATA_PATH || path.join(__dirname, 'data');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const AUTH_DIR = path.join(DATA_DIR, 'whatsapp_auth');
 const DB_PATH = path.join(DATA_DIR, 'consultas.db');
-const AI_CONFIG_PATH = path.join(DATA_DIR, 'ai-config.json');
 
+// Garantir que diretórios existam
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
@@ -148,41 +145,22 @@ function logSystem(type, source, message, meta = {}) {
     }
 }
 
-let aiConfig = {
-  provider: 'gemini',
-  apiKeys: { gemini: '', groq: '' },
-  model: 'gemini-3-flash-preview',
-  persona: 'Você é um assistente útil.',
-  knowledgeRules: [], 
-  temperature: 0.7,
-  aiActive: true
-};
-
-if (fs.existsSync(AI_CONFIG_PATH)) {
-    try {
-        const savedConfig = JSON.parse(fs.readFileSync(AI_CONFIG_PATH, 'utf8'));
-        aiConfig = { ...aiConfig, ...savedConfig };
-    } catch (e) { console.error(e); }
-}
-
-// ... (Funções auxiliares normalizeText, isAutoReply mantidas) ...
-const normalizeText = (text) => {
-    if (!text) return '';
-    return text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-};
-
-function isAutoReply(text) {
-    if (!text) return false;
-    const lower = normalizeText(text);
-    const patterns = [/posso (te|lhe) ajuda/i, /que posso (te|lhe) ajuda/i, /mensagem automatica/i, /assistente virtual/i, /ola, tudo bem/i, /^ola[!,.]?$/i, /^oi[!,.]?$/i];
-    return patterns.some(p => p.test(lower));
-}
-
+// Configuração do Cliente WhatsApp para Docker (Puppeteer)
+// Importante: No Docker precisamos apontar para o executável do Chromium instalado
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: AUTH_DIR }),
   puppeteer: {
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-gpu'
+    ],
   },
   webVersionCache: {
     type: "remote",
@@ -211,13 +189,9 @@ client.on('disconnected', () => {
     logSystem('warning', 'whatsapp', 'Cliente WhatsApp desconectado');
 });
 
-// ... (Lógica de mensagens IA mantida do seu código original) ...
-client.on('message', async (msg) => {
-    if (msg.fromMe) return;
-    // ... (Código da IA omitido para brevidade, mas deve ser mantido no arquivo final) ...
+client.initialize().catch((err) => {
+    console.error("Erro ao inicializar WhatsApp:", err);
 });
-
-client.initialize().catch(() => {});
 
 app.use(cors());
 app.use(express.json());
@@ -271,16 +245,13 @@ app.get('/api/tasks', (req, res) => {
 
 app.post('/api/tasks', (req, res) => {
     const task = req.body;
-    if (task.id && task.id > 1000000000000) { // Check if it's a timestamp ID (new) or existing DB ID
-       // Logic to handle "new" tasks coming with timestamp IDs from frontend
-       // For simplicity, we'll treat IDs > certain number as "insert if not exists" or just rely on proper ID handling
-    }
-
-    if (task.dbId) { // Assume frontend sends dbId if it exists in DB
+    
+    // Check if ID is a valid database ID (integer) or needs insertion
+    if (task.id && typeof task.id === 'number' && task.id < 1000000000000) { 
          const sql = `UPDATE tasks SET title=?, description=?, status=?, priority=?, color=?, dueDate=?, companyId=?, recurrence=?, dayOfWeek=?, recurrenceDate=?, targetCompanyType=? WHERE id=?`;
-         db.run(sql, [task.title, task.description, task.status, task.priority, task.color, task.dueDate, task.companyId, task.recurrence, task.dayOfWeek, task.recurrenceDate, task.targetCompanyType, task.dbId], function(err) {
+         db.run(sql, [task.title, task.description, task.status, task.priority, task.color, task.dueDate, task.companyId, task.recurrence, task.dayOfWeek, task.recurrenceDate, task.targetCompanyType, task.id], function(err) {
             if (err) return res.status(500).json({ error: err.message });
-            res.json({ success: true });
+            res.json({ success: true, id: task.id });
          });
     } else {
          const sql = `INSERT INTO tasks (title, description, status, priority, color, dueDate, companyId, recurrence, dayOfWeek, recurrenceDate, targetCompanyType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
@@ -351,9 +322,6 @@ app.post('/api/whatsapp/disconnect', async (req, res) => {
     }
 });
 
-
-// ... (Manter endpoints originais de campaign, config, logs, etc.) ...
-// API Endpoints Originais
 app.get('/api/logs', (req, res) => res.json(memoryLogs));
 
 // Handle React Routing - serve index.html for unknown routes
