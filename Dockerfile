@@ -1,26 +1,35 @@
-server {
-    listen 80;
-    server_name localhost;
-    
-    root /usr/share/nginx/html;
-    index index.html;
+# Estágio 1: Construção (Build)
+FROM node:18-alpine AS builder
 
-    # Configuração de compressão Gzip para carregar mais rápido
-    gzip on;
-    gzip_min_length 1000;
-    gzip_proxied expired no-cache no-store private auth;
-    gzip_types text/plain text/css application/json application/javascript application/x-javascript text/xml application/xml application/xml+rss text/javascript;
+WORKDIR /app
 
-    location / {
-        # Lógica de SPA: Tenta servir o arquivo solicitado ($uri), 
-        # se não existir, serve o index.html (para o React Router assumir)
-        try_files $uri $uri/ /index.html;
-    }
+# Copia os arquivos de dependências
+COPY package*.json ./
 
-    # Cache para imagens e arquivos estáticos (opcional, mas recomendado)
-    location ~* \.(?:ico|css|js|gif|jpe?g|png|woff2?|eot|ttf|svg)$ {
-        expires 6M;
-        access_log off;
-        add_header Cache-Control "public";
-    }
-}
+# Instala as dependências
+RUN npm install
+
+# Copia todo o restante do código fonte
+COPY . .
+
+# Executa o build da aplicação (Gera a pasta 'dist')
+RUN npm run build
+
+# Estágio 2: Servidor de Produção (Nginx)
+FROM nginx:alpine
+
+# Remove a configuração padrão do Nginx
+RUN rm /etc/nginx/conf.d/default.conf
+
+# Copia nossa configuração personalizada do Nginx
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Copia os arquivos estáticos gerados no build para o Nginx
+# O Vite gera os arquivos na pasta 'dist'
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Expõe a porta 80
+EXPOSE 80
+
+# Inicia o Nginx
+CMD ["nginx", "-g", "daemon off;"]
