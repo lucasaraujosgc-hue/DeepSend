@@ -116,7 +116,7 @@ export const calcularUltimoDiaUtil = (mes: number, ano: number): string => {
   return formatarData(date);
 };
 
-export const calcularTodosVencimentos = (competencia: string) => {
+export const calcularTodosVencimentos = (competencia: string): Record<string, string> => {
   if (!competencia || !competencia.includes('/')) return {};
   
   const [mesStr, anoStr] = competencia.split('/');
