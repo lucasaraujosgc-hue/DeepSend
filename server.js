@@ -24,6 +24,9 @@ const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const AUTH_DIR = path.join(DATA_DIR, 'whatsapp_auth');
 const DB_PATH = path.join(DATA_DIR, 'consultas.db');
 
+console.log(`[INIT] Diretório de Dados: ${DATA_DIR}`);
+console.log(`[INIT] Banco de Dados: ${DB_PATH}`);
+
 // Garantir que diretórios existam
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -147,11 +150,14 @@ function logSystem(type, source, message, meta = {}) {
 
 // Configuração do Cliente WhatsApp para Docker (Puppeteer)
 // Importante: No Docker precisamos apontar para o executável do Chromium instalado
+const puppeteerExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
+console.log(`[INIT] Puppeteer Executable Path: ${puppeteerExecutablePath || 'Padrão (Local)'}`);
+
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: AUTH_DIR }),
   puppeteer: {
     headless: true,
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    executablePath: puppeteerExecutablePath,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',

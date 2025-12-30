@@ -221,8 +221,9 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
                   <button onClick={onNavigateToDocuments} className="font-bold hover:underline">Voltar</button>
               </div>
           ) : (
-              Object.entries(docsByCompany).map(([companyIdStr, companyDocs]) => {
+              Object.entries(docsByCompany).map(([companyIdStr, companyDocsRaw]) => {
                   const companyId = Number(companyIdStr);
+                  const companyDocs = companyDocsRaw as Document[];
                   const company = getCompanyDetails(companyId);
                   const allSelected = companyDocs.every(d => selectedDocs.includes(d.id));
 
