@@ -331,7 +331,8 @@ app.post('/api/whatsapp/disconnect', async (req, res) => {
 app.get('/api/logs', (req, res) => res.json(memoryLogs));
 
 // Handle React Routing - serve index.html for unknown routes
-app.get('*', (req, res) => {
+// Modificação: Uso de Regex para compatibilidade com Express 5 e path-to-regexp novo
+app.get(/.*/, (req, res) => {
     if (!req.path.startsWith('/api')) {
         res.sendFile(path.join(__dirname, 'dist', 'index.html'));
     }
