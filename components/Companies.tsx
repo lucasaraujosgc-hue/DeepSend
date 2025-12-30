@@ -1,11 +1,12 @@
-import React, { useState, useRef } from 'react';
-import { Search, Plus, MoreVertical, Building2, User, Copy, Check, X, Upload, Pencil, Trash } from 'lucide-react';
-import { MOCK_COMPANIES } from '../constants';
+import React, { useState, useRef, useEffect } from 'react';
+import { Search, Plus, Building2, User, Copy, Check, X, Upload, Pencil, Trash, Loader2 } from 'lucide-react';
 import { Company } from '../types';
+import { api } from '../services/api';
 import * as XLSX from 'xlsx';
 
 const Companies: React.FC = () => {
-  const [companies, setCompanies] = useState<Company[]>(MOCK_COMPANIES);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   
   // Modal State
@@ -20,6 +21,23 @@ const Companies: React.FC = () => {
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load Companies from API
+  const loadCompanies = async () => {
+      setLoading(true);
+      try {
+          const data = await api.getCompanies();
+          setCompanies(data);
+      } catch (error) {
+          console.error("Erro ao carregar empresas:", error);
+      } finally {
+          setLoading(false);
+      }
+  };
+
+  useEffect(() => {
+      loadCompanies();
+  }, []);
 
   const handleCopy = (doc: string, id: number) => {
     const cleanDoc = doc.replace(/\D/g, '');
@@ -40,47 +58,40 @@ const Companies: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleDeleteCompany = (id: number) => {
+  const handleDeleteCompany = async (id: number) => {
     if (window.confirm('Tem certeza que deseja excluir esta empresa?')) {
-        setCompanies(prev => prev.filter(c => c.id !== id));
+        try {
+            await api.deleteCompany(id);
+            setCompanies(prev => prev.filter(c => c.id !== id));
+        } catch (error) {
+            alert('Erro ao excluir empresa.');
+        }
     }
   };
 
-  const handleSaveCompany = (e: React.FormEvent) => {
+  const handleSaveCompany = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCompany.name || !newCompany.docNumber) return;
 
-    if (editingId) {
-        // Edit existing
-        setCompanies(prev => prev.map(c => {
-            if (c.id === editingId) {
-                return {
-                    ...c,
-                    name: newCompany.name || '',
-                    docNumber: newCompany.docNumber || '',
-                    type: (newCompany.type as any) || 'CNPJ',
-                    email: newCompany.email || '',
-                    whatsapp: newCompany.whatsapp || ''
-                };
-            }
-            return c;
-        }));
-    } else {
-        // Create new
-        const companyToAdd: Company = {
-            id: Date.now(),
-            name: newCompany.name || '',
-            docNumber: newCompany.docNumber || '',
-            type: (newCompany.type as any) || 'CNPJ',
-            email: newCompany.email || '',
-            whatsapp: newCompany.whatsapp || ''
+    try {
+        const payload = {
+            id: editingId || undefined,
+            name: newCompany.name,
+            docNumber: newCompany.docNumber,
+            type: newCompany.type,
+            email: newCompany.email,
+            whatsapp: newCompany.whatsapp
         };
-        setCompanies([...companies, companyToAdd]);
-    }
 
-    setIsModalOpen(false);
-    setEditingId(null);
-    setNewCompany({ name: '', docNumber: '', type: 'CNPJ', email: '', whatsapp: '' });
+        await api.saveCompany(payload);
+        await loadCompanies(); // Reload to get fresh data/IDs
+        
+        setIsModalOpen(false);
+        setEditingId(null);
+        setNewCompany({ name: '', docNumber: '', type: 'CNPJ', email: '', whatsapp: '' });
+    } catch (error) {
+        alert('Erro ao salvar empresa.');
+    }
   };
 
   const handleOpenNewModal = () => {
@@ -100,59 +111,53 @@ const Companies: React.FC = () => {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       const bstr = evt.target?.result;
       const wb = XLSX.read(bstr, { type: 'binary' });
       const wsname = wb.SheetNames[0];
       const ws = wb.Sheets[wsname];
-      // Get data as array of arrays to handle columns by index
       const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
-
-      // Remove header row if it exists (assuming row 0 is header)
-      // You might want to add a check here, but we'll assume row 0 is header for now
       const rows = data.slice(1);
 
-      const importedCompanies: Company[] = [];
-
-      rows.forEach((row) => {
-        // Col 0: Doc, Col 1: Name, Col 2: Email, Col 3: Whatsapp, Col 4: Type
-        if (row.length < 2) return; // Skip empty rows
-
+      let importedCount = 0;
+      for (const row of rows) {
+        if (row.length < 2) continue;
         const docNumberRaw = String(row[0] || '');
         const name = String(row[1] || '');
         const email = String(row[2] || '');
         const whatsapp = String(row[3] || '');
         let typeRaw = String(row[4] || '').toUpperCase().trim();
-
-        // Normalize Type
         let type: 'CNPJ' | 'CPF' | 'MEI' = 'CNPJ';
         if (typeRaw === 'MEI') type = 'MEI';
         else if (typeRaw === 'CPF') type = 'CPF';
 
         if (docNumberRaw && name) {
-          importedCompanies.push({
-            id: Date.now() + Math.random(),
-            docNumber: docNumberRaw,
-            name: name,
-            email: email,
-            whatsapp: whatsapp,
-            type: type
-          });
+            try {
+                await api.saveCompany({
+                    name, docNumber: docNumberRaw, email, whatsapp, type
+                });
+                importedCount++;
+            } catch (e) {
+                console.error("Falha ao importar linha", row);
+            }
         }
-      });
+      }
 
-      if (importedCompanies.length > 0) {
-        setCompanies(prev => [...prev, ...importedCompanies]);
-        alert(`${importedCompanies.length} empresas importadas com sucesso!`);
+      if (importedCount > 0) {
+        alert(`${importedCount} empresas importadas com sucesso!`);
+        loadCompanies();
       } else {
         alert("Nenhuma empresa válida encontrada no arquivo.");
       }
       
-      // Reset input
       if (fileInputRef.current) fileInputRef.current.value = '';
     };
     reader.readAsBinaryString(file);
   };
+
+  if (loading) {
+      return <div className="flex justify-center items-center h-64"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
+  }
 
   return (
     <div className="space-y-6">

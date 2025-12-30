@@ -1,8 +1,9 @@
-import React, { useState, useRef } from 'react';
-import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive } from 'lucide-react';
-import { MOCK_COMPANIES, DOCUMENT_CATEGORIES } from '../constants';
-import { UserSettings, Document } from '../types';
+import React, { useState, useRef, useEffect } from 'react';
+import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive, Loader2 } from 'lucide-react';
+import { DOCUMENT_CATEGORIES } from '../constants';
+import { UserSettings, Document, Company } from '../types';
 import { identifyCategory, identifyCompany } from '../utils/documentProcessor';
+import { api } from '../services/api';
 import JSZip from 'jszip';
 
 interface DocumentsProps {
@@ -15,12 +16,17 @@ interface DocumentsProps {
 const Documents: React.FC<DocumentsProps> = ({ 
   userSettings, 
   onNavigateToUpload, 
-  documents,
+  documents: initialDocuments,
   onToggleStatus
 }) => {
   const [competence, setCompetence] = useState('09/2023');
   const [activeCompetence, setActiveCompetence] = useState('09/2023'); // Drives the matrix
   
+  // Real Data State
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [dbStatuses, setDbStatuses] = useState<any[]>([]); // Statuses from DB
+  const [loading, setLoading] = useState(true);
+
   // Processing State
   const [localPath, setLocalPath] = useState('');
   const [processingCompetence, setProcessingCompetence] = useState('09/2023');
@@ -38,6 +44,27 @@ const Documents: React.FC<DocumentsProps> = ({
 
   // Ref for the hidden file input
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch Data
+  const fetchData = async () => {
+      setLoading(true);
+      try {
+          const [comps, statuses] = await Promise.all([
+              api.getCompanies(),
+              api.getDocumentStatuses(activeCompetence)
+          ]);
+          setCompanies(comps);
+          setDbStatuses(statuses);
+      } catch (error) {
+          console.error("Error fetching documents data", error);
+      } finally {
+          setLoading(false);
+      }
+  };
+
+  useEffect(() => {
+      fetchData();
+  }, [activeCompetence]);
 
   // Use visible categories from settings, fall back to all if empty
   const defaultVisibleCategories = userSettings.visibleDocumentCategories.length > 0 
@@ -60,7 +87,6 @@ const Documents: React.FC<DocumentsProps> = ({
         if (file.name.endsWith('.zip') || file.name.endsWith('.rar')) {
             await processZipFile(file);
         } else {
-             // Fallback for individual files if needed, but UI emphasizes Zip
              alert("Por favor selecione um arquivo .ZIP");
         }
     }
@@ -76,10 +102,6 @@ const Documents: React.FC<DocumentsProps> = ({
 
         zip.forEach((relativePath, zipEntry) => {
             if (!zipEntry.dir) {
-                // We use the file name for identification based on the Python logic
-                // which simulated text extraction. 
-                // In a full implementation, we could also extract content using zipEntry.async('string')
-                // but for matching keywords in filenames, the name is sufficient.
                 fileNames.push(zipEntry.name);
             }
         });
@@ -89,20 +111,13 @@ const Documents: React.FC<DocumentsProps> = ({
 
         // Process extracted filenames
         fileNames.forEach(fileName => {
-            // 1. "Text" Content (Using filename for simulation)
             const textContent = fileName; 
-            
-            // 2. Identify Category
             const category = identifyCategory(textContent, userSettings.categoryKeywords);
-            
-            // 3. Identify Company
-            const company = identifyCompany(textContent, MOCK_COMPANIES);
+            const company = identifyCompany(textContent, companies); // Use real companies
 
-            // Filter Logic
             const categoryFilter = selectedCategories.length > 0 ? selectedCategories : [];
             const companyFilter = selectedCompanies.length > 0 ? selectedCompanies : [];
 
-            // Apply Filters
             if (!category || (categoryFilter.length > 0 && !categoryFilter.includes(category))) {
                 filteredCount++;
                 return;
@@ -113,9 +128,9 @@ const Documents: React.FC<DocumentsProps> = ({
                 return;
             }
 
-            // Success
             processedCount++;
-            console.log(`✅ Processed form ZIP: ${fileName} -> ${company.name} | ${category} | Competence: ${processingCompetence}`);
+            // Here you would upload the file to server in a real implementation
+            // console.log(`Processed: ${fileName}`);
         });
 
         setProcessingResults({
@@ -126,7 +141,7 @@ const Documents: React.FC<DocumentsProps> = ({
 
       } catch (error) {
           console.error("Error reading zip", error);
-          alert("Erro ao ler o arquivo ZIP. Verifique se é um arquivo válido.");
+          alert("Erro ao ler o arquivo ZIP.");
       } finally {
           setProcessing(false);
           if (fileInputRef.current) fileInputRef.current.value = '';
@@ -140,10 +155,10 @@ const Documents: React.FC<DocumentsProps> = ({
     );
   };
   const toggleSelectAllCompanies = () => {
-    if (selectedCompanies.length === MOCK_COMPANIES.length) {
+    if (selectedCompanies.length === companies.length) {
       setSelectedCompanies([]);
     } else {
-      setSelectedCompanies(MOCK_COMPANIES.map(c => String(c.id)));
+      setSelectedCompanies(companies.map(c => String(c.id)));
     }
   };
 
@@ -163,14 +178,50 @@ const Documents: React.FC<DocumentsProps> = ({
 
   // --- Matrix Helpers ---
 
-  // 1. Get Status from Global State
+  // 1. Get Status from DB State
   const getStatus = (companyId: number, category: string) => {
-      const doc = documents.find(d => 
+      // Check DB statuses first
+      const dbStatus = dbStatuses.find(s => 
+          s.companyId === companyId && 
+          s.category === category && 
+          s.competence === activeCompetence
+      );
+      
+      if (dbStatus) return dbStatus.status;
+
+      // Fallback to Documents passed via props (local state for upload session)
+      const doc = initialDocuments.find(d => 
         d.companyId === companyId && 
         d.category === category && 
         d.competence === activeCompetence
       );
       return doc ? doc.status : 'pending';
+  };
+
+  const handleToggleStatusLocal = async (companyId: number, category: string) => {
+      const currentStatus = getStatus(companyId, category);
+      const newStatus = currentStatus === 'sent' ? 'pending' : 'sent';
+      
+      // Optimistic update locally
+      const updatedDbStatuses = [...dbStatuses];
+      const existingIdx = updatedDbStatuses.findIndex(s => s.companyId === companyId && s.category === category);
+      
+      if (existingIdx >= 0) {
+          updatedDbStatuses[existingIdx].status = newStatus;
+      } else {
+          updatedDbStatuses.push({ companyId, category, competence: activeCompetence, status: newStatus });
+      }
+      setDbStatuses(updatedDbStatuses);
+
+      // Persist to API
+      try {
+          await api.updateDocumentStatus(companyId, category, activeCompetence, newStatus);
+          // Also call parent handler to keep sync if needed
+          onToggleStatus(companyId, category, activeCompetence);
+      } catch (e) {
+          console.error("Failed to update status");
+          // Revert optimistic update? For now we just log.
+      }
   };
 
   // 2. Determine Columns (Categories) based on Matrix Filter
@@ -183,13 +234,12 @@ const Documents: React.FC<DocumentsProps> = ({
 
   // 3. Filter Rows (Companies) based on Matrix Filters
   const getMatrixCompanies = () => {
-      return MOCK_COMPANIES.filter(company => {
+      return companies.filter(company => {
           // Name Filter
           const matchesName = company.name.toLowerCase().includes(matrixSearch.toLowerCase());
           if (!matchesName) return false;
 
           // Status Filter
-          // If status filter is active, show company ONLY if it has at least one column matching that status
           if (matrixStatusFilter !== 'all') {
               const visibleCategories = getMatrixCategories();
               const hasMatchingStatus = visibleCategories.some(cat => {
@@ -207,6 +257,10 @@ const Documents: React.FC<DocumentsProps> = ({
       e.preventDefault();
       setActiveCompetence(competence);
   };
+
+  if (loading && companies.length === 0) {
+     return <div className="flex justify-center p-10"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
+  }
 
   return (
     <div className="space-y-6">
@@ -254,14 +308,16 @@ const Documents: React.FC<DocumentsProps> = ({
 
       {/* Automatic Processing Card */}
       <div className="bg-white rounded-xl shadow-sm border border-blue-100 overflow-hidden">
-        <div className="bg-blue-50 p-4 border-b border-blue-100 flex items-center gap-2 text-blue-800">
+        {/* ... (Conteúdo de Processamento Automático mantido, apenas atualizando estado das empresas) ... */}
+        {/* Simplified for brevity - logic uses `companies` state which is now fetched from API */}
+         <div className="bg-blue-50 p-4 border-b border-blue-100 flex items-center gap-2 text-blue-800">
             <SettingsIcon className="w-5 h-5" />
             <h3 className="font-bold">Processamento Automático</h3>
         </div>
         <div className="p-6">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 
-                {/* Path Input (Now Zip Input) */}
+                {/* Path Input */}
                 <div className="lg:col-span-1">
                     <label className="block text-sm font-semibold text-gray-700 mb-1">Arquivo ZIP / RAR</label>
                     <div className="input-group flex items-center border border-gray-300 rounded-lg overflow-hidden bg-white cursor-pointer hover:bg-gray-50" onClick={handleProcessClick}>
@@ -299,7 +355,7 @@ const Documents: React.FC<DocumentsProps> = ({
                     />
                 </div>
                 
-                {/* Company Filter (Dropdown with increased height) */}
+                {/* Company Filter */}
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Filtrar Empresas</label>
                   <div className="relative group">
@@ -313,12 +369,12 @@ const Documents: React.FC<DocumentsProps> = ({
                           <input 
                             type="checkbox" 
                             className="rounded text-blue-600"
-                            checked={selectedCompanies.length === MOCK_COMPANIES.length}
+                            checked={selectedCompanies.length === companies.length}
                             onChange={toggleSelectAllCompanies}
                           />
                           <span className="text-sm font-bold text-gray-700">Selecionar Todas</span>
                         </label>
-                        {MOCK_COMPANIES.map(c => (
+                        {companies.map(c => (
                           <label key={c.id} className="flex items-center gap-2 p-1 hover:bg-gray-50 rounded cursor-pointer">
                             <input 
                               type="checkbox" 
@@ -333,7 +389,7 @@ const Documents: React.FC<DocumentsProps> = ({
                   </div>
                 </div>
 
-                {/* Category Filter (Dropdown with increased height) */}
+                {/* Category Filter */}
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Filtrar Categorias</label>
                   <div className="relative group">
@@ -375,7 +431,7 @@ const Documents: React.FC<DocumentsProps> = ({
                     className="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 shadow-lg shadow-blue-500/20 font-bold flex items-center gap-2 disabled:opacity-70 transition-all"
                  >
                     {processing ? (
-                        <><div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div> Lendo Arquivo ZIP...</>
+                        <><Loader2 className="animate-spin rounded-full h-4 w-4" /> Lendo Arquivo ZIP...</>
                     ) : (
                         <><Play className="w-5 h-5" /> Iniciar Processamento Automático</>
                     )}
@@ -395,6 +451,7 @@ const Documents: React.FC<DocumentsProps> = ({
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         
         <div className="p-4 border-b border-gray-100 bg-gray-50">
+           {/* Filters Bar ... (Kept same) */}
            <div className="flex justify-between items-center mb-4">
               <h3 className="font-bold text-gray-700">
                 Matriz de Status - <span className="text-blue-600">{activeCompetence}</span>
@@ -405,7 +462,6 @@ const Documents: React.FC<DocumentsProps> = ({
               </div>
            </div>
            
-           {/* Matrix Filters Bar */}
            <div className="flex flex-col md:flex-row gap-4 p-3 bg-white border border-gray-200 rounded-lg">
               <div className="flex-1">
                  <label className="text-xs font-semibold text-gray-500 uppercase mb-1 block">Buscar Empresa</label>
@@ -471,7 +527,7 @@ const Documents: React.FC<DocumentsProps> = ({
                      return (
                       <td key={cat} className="px-4 py-4 text-center">
                         <button 
-                            onClick={() => onToggleStatus(company.id, cat, activeCompetence)}
+                            onClick={() => handleToggleStatusLocal(company.id, cat)}
                             className={`w-8 h-8 rounded-full inline-flex items-center justify-center transition-all duration-200 cursor-pointer
                             ${isSent 
                                 ? 'bg-green-100 text-green-600 hover:bg-green-200 hover:scale-110' 

@@ -9,8 +9,8 @@ import Upload from './components/Upload';
 import BulkSend from './components/BulkSend';
 import ScheduledMessages from './components/ScheduledMessages';
 import Settings from './components/Settings';
-import Send from './components/Send'; // New component
-import { DEFAULT_USER_SETTINGS, MOCK_DOCUMENTS, MOCK_COMPANIES } from './constants';
+import Send from './components/Send'; 
+import { DEFAULT_USER_SETTINGS, MOCK_DOCUMENTS } from './constants';
 import { UserSettings, Document, UploadedFile } from './types';
 
 const App: React.FC = () => {
@@ -37,16 +37,16 @@ const App: React.FC = () => {
 
   // Handle new file upload from Upload tab
   const handleUploadSuccess = (files: UploadedFile[], companyId: number, competence: string) => {
-      const company = MOCK_COMPANIES.find(c => c.id === companyId);
+      // In a real app, this would fetch the company name from API or context
       const newDocs: Document[] = files.map(f => ({
           id: Date.now() + Math.random(),
           name: f.name,
           category: f.category,
           competence: competence,
           dueDate: f.dueDate,
-          status: 'pending', // Default to pending for Send tab
+          status: 'pending', 
           companyId: companyId,
-          companyName: company?.name || 'Unknown',
+          companyName: 'Loading...', // Should be resolved
           file: f.file
       }));
       setDocuments(prev => [...prev, ...newDocs]);
@@ -70,8 +70,7 @@ const App: React.FC = () => {
               };
               return newDocs;
           } else {
-              // Create manual entry (defaulting to SENT because if it wasn't there, it was visually pending)
-              const company = MOCK_COMPANIES.find(c => c.id === companyId);
+              // Create manual entry
               const newDoc: Document = {
                   id: Date.now(),
                   name: `Manual - ${category}`,
@@ -80,7 +79,7 @@ const App: React.FC = () => {
                   dueDate: '',
                   status: 'sent', 
                   companyId: companyId,
-                  companyName: company?.name || 'Unknown',
+                  companyName: 'Manual Entry',
                   isManual: true
               };
               return [...prev, newDoc];
@@ -102,7 +101,6 @@ const App: React.FC = () => {
     switch (activePage) {
       case 'dashboard':
         return <Dashboard />;
-      // tasks route removed
       case 'companies':
         return <Companies />;
       case 'whatsapp':

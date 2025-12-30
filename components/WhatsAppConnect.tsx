@@ -1,41 +1,41 @@
 import React, { useState, useEffect } from 'react';
 import { Smartphone, RefreshCw, CheckCircle2, Loader2, Power, QrCode } from 'lucide-react';
+import { api } from '../services/api';
 
 const WhatsAppConnect: React.FC = () => {
   const [status, setStatus] = useState<'disconnected' | 'generating_qr' | 'ready' | 'connected'>('disconnected');
   const [qrCodeBase64, setQrCodeBase64] = useState<string | null>(null);
   const [sessionInfo, setSessionInfo] = useState<any>(null);
+  const [polling, setPolling] = useState(false);
 
-  // Simulates fetching status from your /status endpoint
-  const checkStatus = () => {
-    // In a real scenario, fetch('/status')
-    // For now, we rely on local state flow
+  const fetchStatus = async () => {
+      try {
+          const data = await api.getWhatsAppStatus();
+          if (data.status === 'connected') {
+              setStatus('connected');
+              setSessionInfo(data.info || { name: 'Sessão Ativa', device: 'WhatsApp Web' });
+              setQrCodeBase64(null);
+          } else if (data.qr) {
+              setStatus('ready');
+              setQrCodeBase64(data.qr);
+          } else {
+              // Disconnected but no QR yet (maybe generating)
+              if (status !== 'generating_qr') setStatus('disconnected');
+          }
+      } catch (e) {
+          console.error('Failed to fetch WA status', e);
+      }
   };
 
-  const handleConnect = () => {
-    setStatus('generating_qr');
-    
-    // Simulating the server generating the QR Code
-    setTimeout(() => {
-        // Mock QR Code (Google Chart API for demo purposes, representing the Base64 from your node server)
-        setQrCodeBase64('https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=WhatsApp-Session-Connect-Secure');
-        setStatus('ready');
-    }, 2000);
-  };
+  useEffect(() => {
+      fetchStatus();
+      const interval = setInterval(fetchStatus, 3000); // Poll every 3s
+      return () => clearInterval(interval);
+  }, []);
 
-  const handleSimulateScan = () => {
-      // Simulating user scanning the QR Code with their phone
-      setStatus('connected');
-      setSessionInfo({
-          name: 'Lucas Araújo',
-          number: '5575981200125',
-          device: 'Iphone 13'
-      });
-      setQrCodeBase64(null);
-  };
-
-  const handleDisconnect = () => {
+  const handleDisconnect = async () => {
       if(confirm('Tem certeza que deseja desconectar o WhatsApp?')) {
+          await api.disconnectWhatsApp();
           setStatus('disconnected');
           setSessionInfo(null);
       }
@@ -48,7 +48,7 @@ const WhatsAppConnect: React.FC = () => {
             <MessageCircle className="w-8 h-8 text-green-600" /> WhatsApp Web
         </h1>
         <p className="text-gray-500 max-w-md mx-auto">
-            Escaneie o QR Code para conectar seu número e permitir o envio automático de documentos.
+            O status é atualizado automaticamente. Escaneie o QR Code abaixo.
         </p>
       </div>
 
@@ -60,42 +60,21 @@ const WhatsAppConnect: React.FC = () => {
                       <Smartphone className="w-10 h-10" />
                   </div>
                   <div>
-                      <h3 className="text-lg font-bold text-gray-800">Desconectado</h3>
+                      <h3 className="text-lg font-bold text-gray-800">Aguardando Servidor...</h3>
                       <p className="text-sm text-gray-500 mt-2">
-                          Nenhuma sessão ativa encontrada. Clique abaixo para gerar um novo QR Code.
+                          Se o QR Code não aparecer em instantes, verifique o console do servidor.
                       </p>
                   </div>
-                  <button 
-                    onClick={handleConnect}
-                    className="w-full bg-green-600 text-white py-3 rounded-xl font-bold hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
-                  >
-                      <QrCode className="w-5 h-5" /> Gerar QR Code
-                  </button>
+                  <div className="flex justify-center">
+                      <Loader2 className="w-6 h-6 animate-spin text-blue-500" />
+                  </div>
               </div>
           )}
 
-          {status === 'generating_qr' && (
-              <div className="py-10 space-y-4">
-                  <Loader2 className="w-12 h-12 text-green-600 animate-spin mx-auto" />
-                  <p className="text-gray-600 font-medium">Iniciando cliente WhatsApp...</p>
-                  <p className="text-xs text-gray-400">Aguarde enquanto geramos o código.</p>
-              </div>
-          )}
-
-          {status === 'ready' && qrCodeBase64 && (
+          {(status === 'ready' || status === 'generating_qr') && qrCodeBase64 && (
               <div className="space-y-6 animate-in zoom-in-95 duration-300">
                   <div className="border-4 border-gray-800 rounded-xl p-2 inline-block bg-white relative group">
                       <img src={qrCodeBase64} alt="Scan Me" className="w-64 h-64 object-contain" />
-                      
-                      {/* Simulation Overlay - Remove in production */}
-                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-lg">
-                          <button 
-                            onClick={handleSimulateScan}
-                            className="bg-white text-gray-800 px-4 py-2 rounded-lg text-sm font-bold hover:bg-gray-100"
-                          >
-                              Simular Leitura
-                          </button>
-                      </div>
                   </div>
                   
                   <div className="text-left space-y-3 text-sm text-gray-600 bg-gray-50 p-4 rounded-lg">
@@ -132,10 +111,10 @@ const WhatsAppConnect: React.FC = () => {
                       </div>
                       <div className="space-y-1">
                            <p className="text-sm text-gray-700 flex justify-between">
-                               <span>Usuário:</span> <strong>{sessionInfo?.name || 'Usuário'}</strong>
+                               <span>Plataforma:</span> <strong>{sessionInfo?.platform || 'Web'}</strong>
                            </p>
                            <p className="text-sm text-gray-700 flex justify-between">
-                               <span>Dispositivo:</span> <strong>{sessionInfo?.device || 'Web Client'}</strong>
+                               <span>Usuário:</span> <strong>{sessionInfo?.pushname || 'Usuário'}</strong>
                            </p>
                       </div>
                   </div>
