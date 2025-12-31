@@ -52,10 +52,8 @@ const Dashboard: React.FC = () => {
   }, []);
 
   const pendingTasks = tasks.filter(t => t.status !== TaskStatus.DONE).length;
-  // Assuming total sent docs isn't tracked globally as a simple counter yet, using mock for that or count from log
-  const sentCount = 128; // Placeholder or calculate from logs if full history available
 
-  // Filter urgent tasks: Priority HIGH and not DONE
+  // Filtra tarefas urgentes: Prioridade 'alta' E Status não 'concluida'
   const urgentTasks = tasks.filter(t => t.priority === 'alta' && t.status !== TaskStatus.DONE);
 
   if (loading) return <div className="flex justify-center p-10"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
@@ -95,7 +93,7 @@ const Dashboard: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Recent Documents Table */}
+        {/* Recent Documents Table (Max 5 via API) */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="p-6 border-b border-gray-100 flex justify-between items-center">
             <h3 className="font-bold text-gray-800 flex items-center gap-2">
@@ -154,6 +152,11 @@ const Dashboard: React.FC = () => {
                   <span className={`text-xs px-2 py-1 rounded font-medium bg-red-100 text-red-700`}>
                     ALTA
                   </span>
+                  {task.dueDate && (
+                      <div className="text-xs text-gray-400 mt-1">
+                          Vence: {new Date(task.dueDate).toLocaleDateString('pt-BR')}
+                      </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -161,7 +164,6 @@ const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* Kanban Section embedded in Dashboard */}
       <div className="pt-6 border-t border-gray-200">
           <Kanban />
       </div>
