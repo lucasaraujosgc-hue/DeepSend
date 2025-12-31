@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive, Loader2 } from 'lucide-react';
 import { DOCUMENT_CATEGORIES } from '../constants';
@@ -20,26 +19,41 @@ const Documents: React.FC<DocumentsProps> = ({
   documents: initialDocuments,
   onToggleStatus
 }) => {
-  const [competence, setCompetence] = useState('09/2023');
-  const [activeCompetence, setActiveCompetence] = useState('09/2023');
+  // Helper to get current competence formatted MM/YYYY
+  const getCurrentCompetence = () => {
+    const now = new Date();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const yyyy = now.getFullYear();
+    return `${mm}/${yyyy}`;
+  };
+
+  const [competence, setCompetence] = useState(getCurrentCompetence());
+  const [activeCompetence, setActiveCompetence] = useState(getCurrentCompetence()); // Drives the matrix
+  
+  // Real Data State
   const [companies, setCompanies] = useState<Company[]>([]);
-  const [dbStatuses, setDbStatuses] = useState<any[]>([]);
+  const [dbStatuses, setDbStatuses] = useState<any[]>([]); // Statuses from DB
   const [loading, setLoading] = useState(true);
 
+  // Processing State
   const [localPath, setLocalPath] = useState('');
-  const [processingCompetence, setProcessingCompetence] = useState('09/2023');
+  const [processingCompetence, setProcessingCompetence] = useState(getCurrentCompetence());
   const [processing, setProcessing] = useState(false);
   const [processingResults, setProcessingResults] = useState<{total: number, processed: number, filtered: number} | null>(null);
   
+  // Matrix Filters
   const [matrixSearch, setMatrixSearch] = useState('');
   const [matrixStatusFilter, setMatrixStatusFilter] = useState<'all' | 'pending' | 'sent'>('all');
   const [matrixCategoryFilter, setMatrixCategoryFilter] = useState<string>('all');
 
+  // Processing Filters
   const [selectedCompanies, setSelectedCompanies] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
 
+  // Ref for the hidden file input
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Fetch Data
   const fetchData = async () => {
       setLoading(true);
       try {
@@ -49,27 +63,39 @@ const Documents: React.FC<DocumentsProps> = ({
           ]);
           setCompanies(comps);
           setDbStatuses(statuses);
-      } catch (error) { console.error(error); } finally { setLoading(false); }
+      } catch (error) {
+          console.error("Error fetching documents data", error);
+      } finally {
+          setLoading(false);
+      }
   };
 
-  useEffect(() => { fetchData(); }, [activeCompetence]);
+  useEffect(() => {
+      fetchData();
+  }, [activeCompetence]);
 
+  // Use visible categories from settings for the Matrix Columns
   const visibleMatrixCategories = userSettings.visibleDocumentCategories.length > 0 
-    ? userSettings.visibleDocumentCategories : DOCUMENT_CATEGORIES.slice(0, 8);
+    ? userSettings.visibleDocumentCategories 
+    : DOCUMENT_CATEGORIES.slice(0, 8);
 
-  const handleProcessClick = () => { if (fileInputRef.current) fileInputRef.current.click(); };
+  const handleProcessClick = () => {
+    // Trigger hidden file input
+    if (fileInputRef.current) {
+        fileInputRef.current.click();
+    }
+  };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-        // Fix: Explicitly cast Array.from result to File[] to avoid 'unknown' type issues
-        const files = Array.from(e.target.files) as File[];
-        setLocalPath(files.length > 1 ? `${files.length} arquivos selecionados` : files[0].name);
+        const file = e.target.files[0];
+        setLocalPath(file.name);
         
-        const zipFile = files.find(f => f.name.endsWith('.zip') || f.name.endsWith('.rar'));
-        if (zipFile) {
-            await processZipFile(zipFile);
+        // Check if zip
+        if (file.name.endsWith('.zip') || file.name.endsWith('.rar')) {
+            await processZipFile(file);
         } else {
-            await processPdfFiles(files);
+             alert("Por favor selecione um arquivo .ZIP");
         }
     }
   };
@@ -77,170 +103,466 @@ const Documents: React.FC<DocumentsProps> = ({
   const processZipFile = async (zipFile: File) => {
       setProcessing(true);
       setProcessingResults(null);
+
       try {
         const zip = await JSZip.loadAsync(zipFile);
         const fileNames: string[] = [];
-        // Fix: Cast entry to any to bypass potential library typing conflicts where entry is unknown
-        zip.forEach((path, entry: any) => { if (!entry.dir) fileNames.push(entry.name); });
 
-        let processed = 0;
-        let filtered = 0;
-        fileNames.forEach(name => {
-            const category = identifyCategory(name, userSettings.categoryKeywords);
-            const company = identifyCompany(name, companies);
-            if (!category || !company) { filtered++; return; }
-            processed++;
+        zip.forEach((relativePath, zipEntry) => {
+            if (!zipEntry.dir) {
+                fileNames.push(zipEntry.name);
+            }
         });
-        setProcessingResults({ total: fileNames.length, processed, filtered });
-      } catch (e) { alert("Erro ZIP"); } finally { setProcessing(false); }
+
+        let processedCount = 0;
+        let filteredCount = 0;
+
+        // Process extracted filenames
+        fileNames.forEach(fileName => {
+            const textContent = fileName; 
+            const category = identifyCategory(textContent, userSettings.categoryKeywords);
+            const company = identifyCompany(textContent, companies); // Use real companies
+
+            const categoryFilter = selectedCategories.length > 0 ? selectedCategories : [];
+            const companyFilter = selectedCompanies.length > 0 ? selectedCompanies : [];
+
+            if (!category || (categoryFilter.length > 0 && !categoryFilter.includes(category))) {
+                filteredCount++;
+                return;
+            }
+
+            if (!company || (companyFilter.length > 0 && !companyFilter.includes(String(company.id)))) {
+                filteredCount++;
+                return;
+            }
+
+            processedCount++;
+            // Here you would upload the file to server in a real implementation
+            // console.log(`Processed: ${fileName}`);
+        });
+
+        setProcessingResults({
+            total: fileNames.length,
+            processed: processedCount,
+            filtered: filteredCount
+        });
+
+      } catch (error) {
+          console.error("Error reading zip", error);
+          alert("Erro ao ler o arquivo ZIP.");
+      } finally {
+          setProcessing(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+      }
   };
 
-  const processPdfFiles = async (pdfFiles: File[]) => {
-    setProcessing(true);
-    setProcessingResults(null);
-    try {
-        let processed = 0;
-        let filtered = 0;
-        pdfFiles.forEach(file => {
-            const category = identifyCategory(file.name, userSettings.categoryKeywords);
-            const company = identifyCompany(file.name, companies);
-            if (!category || !company) { filtered++; return; }
-            processed++;
-        });
-        setProcessingResults({ total: pdfFiles.length, processed, filtered });
-    } catch (e) { alert("Erro PDF"); } finally { setProcessing(false); }
+  // Company Filter Logic
+  const toggleCompanySelection = (id: string) => {
+    setSelectedCompanies(prev => 
+      prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]
+    );
+  };
+  const toggleSelectAllCompanies = () => {
+    if (selectedCompanies.length === companies.length) {
+      setSelectedCompanies([]);
+    } else {
+      setSelectedCompanies(companies.map(c => String(c.id)));
+    }
   };
 
-  const toggleCompanySelection = (id: string) => setSelectedCompanies(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]);
-  const toggleSelectAllCompanies = () => setSelectedCompanies(selectedCompanies.length === companies.length ? [] : companies.map(c => String(c.id)));
-  const toggleCategorySelection = (cat: string) => setSelectedCategories(prev => prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]);
-  const toggleSelectAllCategories = () => setSelectedCategories(selectedCategories.length === DOCUMENT_CATEGORIES.length ? [] : DOCUMENT_CATEGORIES);
+  // Category Filter Logic
+  const toggleCategorySelection = (cat: string) => {
+    setSelectedCategories(prev => 
+      prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]
+    );
+  };
+  const toggleSelectAllCategories = () => {
+    if (selectedCategories.length === DOCUMENT_CATEGORIES.length) {
+      setSelectedCategories([]);
+    } else {
+      setSelectedCategories(DOCUMENT_CATEGORIES);
+    }
+  };
 
+  // --- Matrix Helpers ---
+
+  // 1. Get Status from DB State
   const getStatus = (companyId: number, category: string) => {
-      const dbStatus = dbStatuses.find(s => s.companyId === companyId && s.category === category && s.competence === activeCompetence);
+      // Check DB statuses first
+      const dbStatus = dbStatuses.find(s => 
+          s.companyId === companyId && 
+          s.category === category && 
+          s.competence === activeCompetence
+      );
+      
       if (dbStatus) return dbStatus.status;
-      const doc = initialDocuments.find(d => d.companyId === companyId && d.category === category && d.competence === activeCompetence);
+
+      // Fallback to Documents passed via props (local state for upload session)
+      const doc = initialDocuments.find(d => 
+        d.companyId === companyId && 
+        d.category === category && 
+        d.competence === activeCompetence
+      );
       return doc ? doc.status : 'pending';
   };
 
   const handleToggleStatusLocal = async (companyId: number, category: string) => {
-      const current = getStatus(companyId, category);
-      const newStatus = current === 'sent' ? 'pending' : 'sent';
-      const updated = [...dbStatuses];
-      const idx = updated.findIndex(s => s.companyId === companyId && s.category === category);
-      if (idx >= 0) updated[idx].status = newStatus;
-      else updated.push({ companyId, category, competence: activeCompetence, status: newStatus });
-      setDbStatuses(updated);
+      const currentStatus = getStatus(companyId, category);
+      const newStatus = currentStatus === 'sent' ? 'pending' : 'sent';
+      
+      // Optimistic update locally
+      const updatedDbStatuses = [...dbStatuses];
+      const existingIdx = updatedDbStatuses.findIndex(s => s.companyId === companyId && s.category === category);
+      
+      if (existingIdx >= 0) {
+          updatedDbStatuses[existingIdx].status = newStatus;
+      } else {
+          updatedDbStatuses.push({ companyId, category, competence: activeCompetence, status: newStatus });
+      }
+      setDbStatuses(updatedDbStatuses);
+
+      // Persist to API
       try {
           await api.updateDocumentStatus(companyId, category, activeCompetence, newStatus);
+          // Also call parent handler to keep sync if needed
           onToggleStatus(companyId, category, activeCompetence);
-      } catch (e) {}
+      } catch (e) {
+          console.error("Failed to update status");
+          // Revert optimistic update? For now we just log.
+      }
   };
 
-  const getMatrixCategories = () => matrixCategoryFilter !== 'all' ? [matrixCategoryFilter] : visibleMatrixCategories;
-  const getMatrixCompanies = () => companies.filter(company => {
-      if (!company.name.toLowerCase().includes(matrixSearch.toLowerCase())) return false;
-      if (matrixStatusFilter !== 'all') {
-          if (!getMatrixCategories().some(cat => getStatus(company.id, cat) === matrixStatusFilter)) return false;
+  // 2. Determine Columns (Categories) based on Matrix Filter
+  const getMatrixCategories = () => {
+      if (matrixCategoryFilter !== 'all') {
+          return [matrixCategoryFilter];
       }
-      return true;
-  });
+      return visibleMatrixCategories;
+  };
 
-  if (loading && companies.length === 0) return <div className="flex justify-center p-10"><Loader2 className="animate-spin" /></div>;
+  // 3. Filter Rows (Companies) based on Matrix Filters
+  const getMatrixCompanies = () => {
+      return companies.filter(company => {
+          // Name Filter
+          const matchesName = company.name.toLowerCase().includes(matrixSearch.toLowerCase());
+          if (!matchesName) return false;
+
+          // Status Filter
+          if (matrixStatusFilter !== 'all') {
+              const visibleCategories = getMatrixCategories();
+              const hasMatchingStatus = visibleCategories.some(cat => {
+                  const status = getStatus(company.id, cat);
+                  return status === matrixStatusFilter;
+              });
+              if (!hasMatchingStatus) return false;
+          }
+
+          return true;
+      });
+  };
+
+  const handleSearchCompetence = (e: React.FormEvent) => {
+      e.preventDefault();
+      setActiveCompetence(competence);
+  };
+
+  if (loading && companies.length === 0) {
+     return <div className="flex justify-center p-10"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
+  }
 
   return (
     <div className="space-y-6">
-      <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
-        <div className="bg-blue-600 text-white p-4 font-bold flex items-center gap-2"><CalendarCheck /> Verificar por Competência</div>
+      
+      {/* Competence Selection Card */}
+      <div className="bg-white rounded-xl shadow-sm border-0 overflow-hidden mb-4">
+        <div className="bg-blue-600 text-white py-3 px-6">
+            <h5 className="mb-0 flex items-center gap-2 font-bold">
+                <CalendarCheck className="w-5 h-5" /> Verificar Documentos por Competência (Normal)
+            </h5>
+        </div>
         <div className="p-6">
-            <form onSubmit={e => { e.preventDefault(); setActiveCompetence(competence); }} className="flex gap-4 items-end">
-                <div className="flex-1">
-                    <label className="text-sm font-semibold mb-1 block">Competência (MM/AAAA)</label>
-                    <input type="text" className="w-full border rounded-lg p-2" value={competence} onChange={e => setCompetence(e.target.value)} required />
+            <form onSubmit={handleSearchCompetence}>
+                <div className="flex flex-col md:flex-row gap-4 items-end">
+                    <div className="flex-1">
+                        <label htmlFor="competencia" className="block text-sm font-semibold text-gray-700 mb-2">Digite a competência (MM/AAAA)</label>
+                        <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                                <CalendarCheck className="w-5 h-5" />
+                            </span>
+                            <input 
+                                type="text" 
+                                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" 
+                                id="competencia" 
+                                placeholder="Ex: 05/2023" 
+                                value={competence}
+                                onChange={(e) => {
+                                    let val = e.target.value.replace(/\D/g, '');
+                                    if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 6);
+                                    setCompetence(val);
+                                }}
+                                required 
+                            />
+                        </div>
+                    </div>
+                    <div className="flex-1 md:flex-none md:w-48">
+                        <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 font-medium">
+                            <Search className="w-4 h-4" /> Verificar
+                        </button>
+                    </div>
                 </div>
-                <button type="submit" className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold">Verificar</button>
             </form>
         </div>
       </div>
 
+      {/* Automatic Processing Card */}
       <div className="bg-white rounded-xl shadow-sm border border-blue-100 overflow-hidden">
-         <div className="bg-blue-50 p-4 border-b flex items-center gap-2 text-blue-800 font-bold"><SettingsIcon /> Processamento Automático</div>
-        <div className="p-6 space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                <div>
-                    <label className="text-sm font-semibold block mb-1">Arquivos (ZIP ou PDFs)</label>
-                    <div className="flex items-center border rounded-lg bg-gray-50 cursor-pointer p-2" onClick={handleProcessClick}>
-                         <FolderArchive className="w-4 h-4 mr-2" />
-                         <span className="text-xs truncate">{localPath || 'Selecionar...'}</span>
-                         <input type="file" multiple accept=".zip,.rar,.pdf" ref={fileInputRef} className="hidden" onChange={handleFileSelect} />
+         <div className="bg-blue-50 p-4 border-b border-blue-100 flex items-center gap-2 text-blue-800">
+            <SettingsIcon className="w-5 h-5" />
+            <h3 className="font-bold">Processamento Automático</h3>
+        </div>
+        <div className="p-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                
+                {/* Path Input */}
+                <div className="lg:col-span-1">
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">Arquivo ZIP / RAR</label>
+                    <div className="input-group flex items-center border border-gray-300 rounded-lg overflow-hidden bg-white cursor-pointer hover:bg-gray-50" onClick={handleProcessClick}>
+                         <span className="px-3 text-gray-400 bg-gray-50 border-r py-2"><FolderArchive className="w-4 h-4" /></span>
+                         <input 
+                            type="text" 
+                            className="flex-1 px-3 py-2 outline-none text-sm cursor-pointer"
+                            placeholder="Selecionar arquivo .zip..."
+                            value={localPath}
+                            readOnly
+                         />
+                         <input 
+                            type="file" 
+                            accept=".zip,.rar"
+                            ref={fileInputRef} 
+                            className="hidden" 
+                            onChange={handleFileSelect} 
+                        />
                     </div>
                 </div>
+
+                {/* Processing Competence */}
                 <div>
-                   <label className="text-sm font-semibold block mb-1">Competência Alvo</label>
-                   <input type="text" className="w-full border rounded-lg p-2" value={processingCompetence} onChange={e => setProcessingCompetence(e.target.value)} />
+                   <label className="block text-sm font-semibold text-gray-700 mb-1">Competência do Processamento</label>
+                   <input 
+                        type="text" 
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="MM/AAAA"
+                        value={processingCompetence}
+                        onChange={(e) => {
+                            let val = e.target.value.replace(/\D/g, '');
+                            if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 6);
+                            setProcessingCompetence(val);
+                        }}
+                    />
                 </div>
+                
+                {/* Company Filter */}
                 <div>
-                  <label className="text-sm font-semibold block mb-1">Filtrar Empresas</label>
-                  <button className="w-full text-left border rounded-lg p-2 text-sm bg-white truncate">
-                    {selectedCompanies.length === 0 ? 'Todas' : `${selectedCompanies.length} selec.`}
-                  </button>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Filtrar Empresas</label>
+                  <div className="relative group">
+                    <button className="w-full text-left border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white flex justify-between items-center">
+                      <span className="truncate">
+                        {selectedCompanies.length === 0 ? 'Todas as Empresas' : `${selectedCompanies.length} selecionadas`}
+                      </span>
+                    </button>
+                    <div className="absolute top-full left-0 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 hidden group-hover:block hover:block p-2 max-h-96 overflow-y-auto">
+                        <label className="flex items-center gap-2 p-1 hover:bg-gray-50 rounded cursor-pointer border-b mb-1 pb-1">
+                          <input 
+                            type="checkbox" 
+                            className="rounded text-blue-600"
+                            checked={selectedCompanies.length === companies.length}
+                            onChange={toggleSelectAllCompanies}
+                          />
+                          <span className="text-sm font-bold text-gray-700">Selecionar Todas</span>
+                        </label>
+                        {companies.map(c => (
+                          <label key={c.id} className="flex items-center gap-2 p-1 hover:bg-gray-50 rounded cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              className="rounded text-blue-600"
+                              checked={selectedCompanies.includes(String(c.id))}
+                              onChange={() => toggleCompanySelection(String(c.id))}
+                            />
+                            <span className="text-sm text-gray-600 truncate">{c.name}</span>
+                          </label>
+                        ))}
+                    </div>
+                  </div>
                 </div>
+
+                {/* Category Filter */}
                 <div>
-                  <label className="text-sm font-semibold block mb-1">Filtrar Categorias</label>
-                  <button className="w-full text-left border rounded-lg p-2 text-sm bg-white truncate">
-                    {selectedCategories.length === 0 ? 'Todas' : `${selectedCategories.length} selec.`}
-                  </button>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Filtrar Categorias</label>
+                  <div className="relative group">
+                    <button className="w-full text-left border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white flex justify-between items-center">
+                      <span className="truncate">
+                        {selectedCategories.length === 0 ? 'Todas as Categorias' : `${selectedCategories.length} selecionadas`}
+                      </span>
+                    </button>
+                    <div className="absolute top-full left-0 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 hidden group-hover:block hover:block p-2 max-h-96 overflow-y-auto">
+                        <label className="flex items-center gap-2 p-1 hover:bg-gray-50 rounded cursor-pointer border-b mb-1 pb-1">
+                          <input 
+                            type="checkbox" 
+                            className="rounded text-blue-600"
+                            checked={selectedCategories.length === DOCUMENT_CATEGORIES.length}
+                            onChange={toggleSelectAllCategories}
+                          />
+                          <span className="text-sm font-bold text-gray-700">Todas</span>
+                        </label>
+                        {DOCUMENT_CATEGORIES.map(cat => (
+                          <label key={cat} className="flex items-center gap-2 p-1 hover:bg-gray-50 rounded cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              className="rounded text-blue-600"
+                              checked={selectedCategories.includes(cat)}
+                              onChange={() => toggleCategorySelection(cat)}
+                            />
+                            <span className="text-sm text-gray-600 truncate">{cat}</span>
+                          </label>
+                        ))}
+                    </div>
+                  </div>
                 </div>
             </div>
-            <div className="flex flex-col items-center">
-                 <button onClick={handleProcessClick} disabled={processing} className="bg-blue-600 text-white px-8 py-3 rounded-lg font-bold flex items-center gap-2 shadow-lg disabled:opacity-50">
-                    {processing ? <Loader2 className="animate-spin" /> : <Play />} Iniciar Processamento
+            
+            <div className="mt-6 flex flex-col items-center">
+                 <button 
+                    onClick={handleProcessClick}
+                    disabled={processing}
+                    className="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 shadow-lg shadow-blue-500/20 font-bold flex items-center gap-2 disabled:opacity-70 transition-all"
+                 >
+                    {processing ? (
+                        <><Loader2 className="animate-spin rounded-full h-4 w-4" /> Lendo Arquivo ZIP...</>
+                    ) : (
+                        <><Play className="w-5 h-5" /> Iniciar Processamento Automático</>
+                    )}
                  </button>
                  {processingResults && (
-                   <div className="mt-4 text-xs text-gray-600">
-                      <strong>Resultado:</strong> {processingResults.total} encontrados, <span className="text-green-600 font-bold">{processingResults.processed} aceitos</span>.
+                   <div className="mt-4 text-sm text-gray-600 bg-gray-50 p-2 rounded border border-gray-200">
+                      <strong>Resultado do ZIP:</strong> {processingResults.total} arquivos encontrados. 
+                      <span className="text-green-600 font-bold ml-2">{processingResults.processed} aceitos</span>. 
+                      <span className="text-red-500 font-bold ml-2">{processingResults.filtered} filtrados</span>.
                    </div>
                  )}
             </div>
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
-        <div className="p-4 bg-gray-50 border-b flex justify-between items-center">
-            <h3 className="font-bold">Matriz de Status - {activeCompetence}</h3>
-            <div className="flex gap-4">
-                <input type="text" placeholder="Buscar..." className="border rounded px-2 py-1 text-xs" value={matrixSearch} onChange={e => setMatrixSearch(e.target.value)} />
-                <select className="border rounded px-2 py-1 text-xs" value={matrixCategoryFilter} onChange={e => setMatrixCategoryFilter(e.target.value)}>
-                    <option value="all">Todas as Categorias</option>
-                    {visibleMatrixCategories.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-            </div>
+      {/* Document Matrix Section */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+        
+        <div className="p-4 border-b border-gray-100 bg-gray-50">
+           {/* Filters Bar */}
+           <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-gray-700">
+                Matriz de Status - <span className="text-blue-600">{activeCompetence}</span>
+              </h3>
+              <div className="flex gap-3 text-sm">
+                <span className="flex items-center gap-1 text-green-600"><Check className="w-4 h-4" /> Enviado</span>
+                <span className="flex items-center gap-1 text-red-500"><X className="w-4 h-4" /> Pendente</span>
+              </div>
+           </div>
+           
+           <div className="flex flex-col md:flex-row gap-4 p-3 bg-white border border-gray-200 rounded-lg">
+              <div className="flex-1">
+                 <label className="text-xs font-semibold text-gray-500 uppercase mb-1 block">Buscar Empresa</label>
+                 <div className="relative">
+                    <Search className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input 
+                      type="text" 
+                      className="w-full pl-8 pr-3 py-1.5 border border-gray-300 rounded text-sm outline-none focus:ring-1 focus:ring-blue-500"
+                      placeholder="Nome da empresa..."
+                      value={matrixSearch}
+                      onChange={(e) => setMatrixSearch(e.target.value)}
+                    />
+                 </div>
+              </div>
+              <div className="flex-1">
+                 <label className="text-xs font-semibold text-gray-500 uppercase mb-1 block">Filtrar Categoria</label>
+                 <select 
+                   className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none"
+                   value={matrixCategoryFilter}
+                   onChange={(e) => setMatrixCategoryFilter(e.target.value)}
+                 >
+                   <option value="all">Todas as Categorias</option>
+                   {visibleMatrixCategories.map(cat => (
+                     <option key={cat} value={cat}>{cat}</option>
+                   ))}
+                 </select>
+              </div>
+              <div className="flex-1">
+                 <label className="text-xs font-semibold text-gray-500 uppercase mb-1 block">Filtrar Status</label>
+                 <select 
+                   className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none"
+                   value={matrixStatusFilter}
+                   onChange={(e) => setMatrixStatusFilter(e.target.value as any)}
+                 >
+                   <option value="all">Todos</option>
+                   <option value="pending">Pendente (Exibir se houver)</option>
+                   <option value="sent">Enviado (Exibir se houver)</option>
+                 </select>
+              </div>
+           </div>
         </div>
+        
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-gray-50 border-b">
-                <th className="p-4 text-left min-w-[200px] sticky left-0 bg-gray-50 z-10">Empresa</th>
-                {getMatrixCategories().map(cat => <th key={cat} className="p-4 text-center">{cat}</th>)}
-                <th className="p-4 text-center sticky right-0 bg-gray-50 z-10 border-l">Ações</th>
+              <tr className="border-b border-gray-200">
+                <th className="px-6 py-4 text-left font-semibold text-gray-600 bg-gray-50 min-w-[200px] sticky left-0 shadow-sm z-10">Empresa</th>
+                {getMatrixCategories().map(cat => (
+                  <th key={cat} className="px-4 py-4 text-center font-semibold text-gray-600 min-w-[100px]">{cat}</th>
+                ))}
+                <th className="px-4 py-4 text-center font-semibold text-gray-600 bg-gray-50 min-w-[100px] sticky right-0 shadow-sm z-10 border-l">Ações</th>
               </tr>
             </thead>
-            <tbody className="divide-y">
-              {getMatrixCompanies().map(company => (
-                <tr key={company.id} className="hover:bg-gray-50">
-                  <td className="p-4 font-medium sticky left-0 bg-white group-hover:bg-gray-50">{company.name}</td>
-                  {getMatrixCategories().map(cat => (
-                      <td key={cat} className="p-4 text-center">
-                        <button onClick={() => handleToggleStatusLocal(company.id, cat)} className={`w-8 h-8 rounded-full border flex items-center justify-center mx-auto ${getStatus(company.id, cat) === 'sent' ? 'bg-green-100 text-green-600 border-green-200' : 'bg-red-50 text-red-500 border-red-100'}`}>
-                            {getStatus(company.id, cat) === 'sent' ? <Check size={14} /> : <X size={14} />}
+            <tbody className="divide-y divide-gray-100">
+              {getMatrixCompanies().map((company) => (
+                <tr key={company.id} className="hover:bg-gray-50 group">
+                  <td className="px-6 py-4 font-medium text-gray-900 bg-white group-hover:bg-gray-50 sticky left-0 shadow-sm">
+                    {company.name}
+                  </td>
+                  {getMatrixCategories().map((cat) => {
+                     const status = getStatus(company.id, cat);
+                     const isSent = status === 'sent';
+                     return (
+                      <td key={cat} className="px-4 py-4 text-center">
+                        <button 
+                            onClick={() => handleToggleStatusLocal(company.id, cat)}
+                            className={`w-8 h-8 rounded-full inline-flex items-center justify-center transition-all duration-200 cursor-pointer
+                            ${isSent 
+                                ? 'bg-green-100 text-green-600 hover:bg-green-200 hover:scale-110' 
+                                : 'bg-red-50 text-red-500 hover:bg-red-100 hover:scale-110'}`}
+                            title={isSent ? 'Clique para marcar como Pendente' : 'Clique para marcar como Enviado'}
+                        >
+                            {isSent ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
                         </button>
                       </td>
-                  ))}
-                  <td className="p-4 text-center sticky right-0 bg-white border-l">
-                      <button onClick={() => onNavigateToUpload(company.id, activeCompetence)} className="text-blue-600 hover:bg-blue-50 p-1 rounded"><Upload size={18} /></button>
+                     );
+                  })}
+                  <td className="px-4 py-4 text-center bg-white group-hover:bg-gray-50 sticky right-0 shadow-sm border-l">
+                      <button 
+                        onClick={() => onNavigateToUpload(company.id, activeCompetence)}
+                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        title="Fazer Upload para esta empresa"
+                      >
+                          <Upload className="w-5 h-5" />
+                      </button>
                   </td>
                 </tr>
               ))}
+              {getMatrixCompanies().length === 0 && (
+                <tr>
+                   <td colSpan={getMatrixCategories().length + 2} className="px-6 py-8 text-center text-gray-500">
+                      Nenhuma empresa encontrada com os filtros selecionados.
+                   </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
