@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive, Loader2, FilePlus } from 'lucide-react';
 import { DOCUMENT_CATEGORIES } from '../constants';
 import { UserSettings, Document, Company, UploadedFile } from '../types';
-import { identifyCategory, identifyCompany } from '../utils/documentProcessor';
+import { identifyCategory, identifyCompany, extractTextFromPDF } from '../utils/documentProcessor';
 import { api } from '../services/api';
 import { calcularTodosVencimentos } from '../utils/dateHelpers';
 import JSZip from 'jszip';
@@ -91,7 +91,7 @@ const Documents: React.FC<DocumentsProps> = ({
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-        const files = Array.from(e.target.files);
+        const files: File[] = Array.from(e.target.files);
         
         // Update display text
         if (files.length === 1) {
@@ -127,24 +127,36 @@ const Documents: React.FC<DocumentsProps> = ({
 
       try {
           for (const file of fileList) {
-             const textContent = file.name; // Use filename for categorization
+             // 1. Extract Text from PDF content (simulating Python logic)
+             let textContent = file.name; // Fallback to filename
+             if (file.type === 'application/pdf') {
+                 const extracted = await extractTextFromPDF(file);
+                 if (extracted && extracted.length > 10) {
+                     textContent = extracted + " " + file.name; // Use both content and filename
+                 }
+             }
+
+             // 2. Identify Category & Company using content
              const category = identifyCategory(textContent, userSettings.categoryKeywords);
              const company = identifyCompany(textContent, companies);
 
+             // 3. Filters
              const categoryFilter = selectedCategories.length > 0 ? selectedCategories : [];
              const companyFilter = selectedCompanies.length > 0 ? selectedCompanies : [];
 
              if (!category || (categoryFilter.length > 0 && !categoryFilter.includes(category))) {
+                 console.log(`Arquivo filtrado/ignorado (Categoria): ${file.name} -> ${category || 'Não identificada'}`);
                  filteredCount++;
                  continue;
              }
 
              if (!company || (companyFilter.length > 0 && !companyFilter.includes(String(company.id)))) {
+                 console.log(`Arquivo filtrado/ignorado (Empresa): ${file.name} -> ${company?.name || 'Não identificada'}`);
                  filteredCount++;
                  continue;
              }
 
-             // Real Upload
+             // 4. Real Upload
              try {
                 const uploadRes = await api.uploadFile(file);
                 
@@ -191,7 +203,7 @@ const Documents: React.FC<DocumentsProps> = ({
         const entries: {name: string, obj: any}[] = [];
 
         zip.forEach((relativePath, zipEntry) => {
-            if (!zipEntry.dir) {
+            if (!zipEntry.dir && !zipEntry.name.startsWith('__MACOSX') && !zipEntry.name.endsWith('.DS_Store')) {
                 entries.push({ name: zipEntry.name, obj: zipEntry });
             }
         });
@@ -201,11 +213,24 @@ const Documents: React.FC<DocumentsProps> = ({
 
         for (const entry of entries) {
             const fileName = entry.name;
-            // Clean filename from path if needed
             const simpleName = fileName.split('/').pop() || fileName;
 
-            const category = identifyCategory(simpleName, userSettings.categoryKeywords);
-            const company = identifyCompany(simpleName, companies);
+            // Convert ZipObject to Blob/File to read content
+            const blob = await entry.obj.async("blob");
+            const file = new File([blob], simpleName, { type: blob.type || 'application/pdf' });
+
+            // 1. Extract Text
+            let textContent = simpleName; 
+            if (simpleName.toLowerCase().endsWith('.pdf')) {
+                 const extracted = await extractTextFromPDF(file);
+                 if (extracted && extracted.length > 10) {
+                     textContent = extracted + " " + simpleName;
+                 }
+            }
+
+            // 2. Identify
+            const category = identifyCategory(textContent, userSettings.categoryKeywords);
+            const company = identifyCompany(textContent, companies);
 
             const categoryFilter = selectedCategories.length > 0 ? selectedCategories : [];
             const companyFilter = selectedCompanies.length > 0 ? selectedCompanies : [];
@@ -219,10 +244,6 @@ const Documents: React.FC<DocumentsProps> = ({
                 filteredCount++;
                 continue;
             }
-
-            // Convert ZipObject to Blob/File for upload
-            const blob = await entry.obj.async("blob");
-            const file = new File([blob], simpleName, { type: blob.type || 'application/pdf' });
 
             try {
                 const uploadRes = await api.uploadFile(file);
@@ -541,7 +562,7 @@ const Documents: React.FC<DocumentsProps> = ({
                     className="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 shadow-lg shadow-blue-500/20 font-bold flex items-center gap-2 disabled:opacity-70 transition-all"
                  >
                     {processing ? (
-                        <><Loader2 className="animate-spin rounded-full h-4 w-4" /> Processando e Enviando...</>
+                        <><Loader2 className="animate-spin rounded-full h-4 w-4" /> Lendo Conteúdo e Processando...</>
                     ) : (
                         <><Play className="w-5 h-5" /> Iniciar Processamento Automático</>
                     )}

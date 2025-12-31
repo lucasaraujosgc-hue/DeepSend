@@ -8,6 +8,7 @@ const FIXED_HOLIDAYS = [
   '10-12', // Nossa Senhora Aparecida
   '11-02', // Finados
   '11-15', // Proclamação da República
+  '11-20', // Consciência Negra (Adicionado)
   '12-25'  // Natal
 ];
 
@@ -143,9 +144,9 @@ export const calcularTodosVencimentos = (competencia: string): Record<string, st
   return {
       'Contracheque': calcularQuintoDiaUtil(mes, ano),
       'Folha de Pagamento': calcularQuintoDiaUtil(mes, ano), 
-      'FGTS': calcularVencimentoComRegra(mes, ano, 20, 'antecipado'),
-      'INSS': calcularVencimentoComRegra(mes, ano, 20, 'antecipado'),
-      // Simples Nacional: Vence dia 20. Se feriado, posterga.
+      'FGTS': calcularVencimentoComRegra(mes, ano, 7, 'antecipado'), // FGTS dia 7 (antecipado)
+      'INSS': calcularVencimentoComRegra(mes, ano, 20, 'antecipado'), // INSS dia 20 (antecipado)
+      // Simples Nacional: Vence dia 20. Se feriado, posterga para o próximo dia útil.
       'Simples Nacional': calcularVencimentoComRegra(mes, ano, 20, 'postergado'),
       'Parcelamento': calcularUltimoDiaUtil(mes, ano),
       'Honorários': calcularVencimentoComRegra(mes, ano, 10, 'postergado'), 
