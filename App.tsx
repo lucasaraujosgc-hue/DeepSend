@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
@@ -118,6 +119,7 @@ const App: React.FC = () => {
         return <Upload 
                   preFillData={uploadPreFill} 
                   onUploadSuccess={handleUploadSuccess}
+                  userSettings={userSettings}
                />;
       case 'send':
         return <Send 

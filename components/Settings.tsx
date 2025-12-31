@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Save, User, Mail, MessageCircle, FileText, Check, LayoutTemplate, Link as LinkIcon, Plus, Trash } from 'lucide-react';
-import { UserSettings } from '../types';
+import { Save, User, Mail, MessageCircle, FileText, Check, LayoutTemplate, Link as LinkIcon, Plus, Trash, Clock, CalendarDays } from 'lucide-react';
+import { UserSettings, CategoryRule } from '../types';
 import { DOCUMENT_CATEGORIES } from '../constants';
 
 interface SettingsProps {
@@ -9,7 +9,7 @@ interface SettingsProps {
 }
 
 const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
-  const [activeTab, setActiveTab] = useState<'signatures' | 'documents' | 'bindings'>('signatures');
+  const [activeTab, setActiveTab] = useState<'signatures' | 'documents' | 'bindings' | 'due_dates'>('signatures');
   const [formData, setFormData] = useState<UserSettings>(settings);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [newKeyword, setNewKeyword] = useState('');
@@ -58,6 +58,19 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
     }));
   };
 
+  const updateRule = (category: string, field: keyof CategoryRule, value: any) => {
+    setFormData(prev => ({
+      ...prev,
+      categoryRules: {
+        ...prev.categoryRules,
+        [category]: {
+          ...(prev.categoryRules[category] || { day: 1, rule: 'fixo' }),
+          [field]: value
+        }
+      }
+    }));
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -65,7 +78,7 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
           <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
             <User className="w-6 h-6 text-blue-600" /> Configurações do Usuário
           </h1>
-          <p className="text-gray-500">Gerencie assinaturas, colunas e vinculações de documentos.</p>
+          <p className="text-gray-500">Gerencie assinaturas, colunas e regras de documentos.</p>
         </div>
         <button 
           onClick={handleSave}
@@ -91,14 +104,21 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
             className={`px-6 py-4 font-medium text-sm flex items-center gap-2 transition-colors border-b-2 whitespace-nowrap
               ${activeTab === 'documents' ? 'border-blue-500 text-blue-600 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
           >
-            <LayoutTemplate className="w-4 h-4" /> Colunas de Documentos
+            <LayoutTemplate className="w-4 h-4" /> Colunas (Matriz)
           </button>
           <button
             onClick={() => setActiveTab('bindings')}
             className={`px-6 py-4 font-medium text-sm flex items-center gap-2 transition-colors border-b-2 whitespace-nowrap
               ${activeTab === 'bindings' ? 'border-blue-500 text-blue-600 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
           >
-            <LinkIcon className="w-4 h-4" /> Vinculações (Palavras-chave)
+            <LinkIcon className="w-4 h-4" /> Vinculações
+          </button>
+          <button
+            onClick={() => setActiveTab('due_dates')}
+            className={`px-6 py-4 font-medium text-sm flex items-center gap-2 transition-colors border-b-2 whitespace-nowrap
+              ${activeTab === 'due_dates' ? 'border-blue-500 text-blue-600 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+          >
+            <CalendarDays className="w-4 h-4" /> Vencimentos
           </button>
         </div>
 
@@ -190,14 +210,14 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
           {activeTab === 'bindings' && (
             <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 space-y-8">
                <div className="mb-6">
-                 <h3 className="font-semibold text-gray-800">Mapeamento de Palavras-chave</h3>
-                 <p className="text-sm text-gray-500">Defina palavras-chave que, se encontradas no texto do arquivo, identificarão automaticamente a categoria do documento.</p>
+                 <h3 className="font-semibold text-gray-800">Palavras-chave de Identificação</h3>
+                 <p className="text-sm text-gray-500">Configure as palavras-chave usadas para identificar automaticamente a categoria dos arquivos.</p>
                </div>
 
                {/* Add New Keyword */}
-               <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 flex flex-col md:flex-row gap-4 items-end">
+               <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 flex flex-col md:flex-row gap-4 items-end mb-8">
                   <div className="flex-1 w-full">
-                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Categoria</label>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Categoria Alvo</label>
                     <select 
                       className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none"
                       value={selectedCategoryForKeyword}
@@ -207,7 +227,7 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
                     </select>
                   </div>
                   <div className="flex-[2] w-full">
-                     <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Palavra-chave ou Expressão</label>
+                     <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Adicionar Nova Palavra-chave</label>
                      <input 
                         type="text" 
                         className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none"
@@ -224,39 +244,103 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
                   </button>
                </div>
 
-               {/* List Keywords */}
+               {/* List Categories with Keywords Only */}
                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                 {Object.keys(formData.categoryKeywords).map(category => (
-                   <div key={category} className="border border-gray-200 rounded-lg overflow-hidden">
-                      <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 font-semibold text-gray-700 flex justify-between">
-                         <span>{category}</span>
-                         <span className="text-xs bg-gray-200 px-2 py-0.5 rounded text-gray-600">
-                           {formData.categoryKeywords[category].length} palavras
-                         </span>
-                      </div>
-                      <div className="p-4 space-y-2 max-h-48 overflow-y-auto">
-                        {formData.categoryKeywords[category].length === 0 ? (
-                           <p className="text-sm text-gray-400 italic">Nenhuma palavra-chave definida.</p>
-                        ) : (
-                          formData.categoryKeywords[category].map((kw, idx) => (
-                             <div key={idx} className="flex justify-between items-center group">
-                                <span className="text-sm text-gray-600 bg-blue-50 px-2 py-1 rounded border border-blue-100 w-full mr-2">
-                                  {kw}
-                                </span>
-                                <button 
-                                  onClick={() => removeKeyword(category, kw)}
-                                  className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                                >
-                                   <Trash className="w-4 h-4" />
-                                </button>
-                             </div>
-                          ))
-                        )}
-                      </div>
-                   </div>
-                 ))}
+                 {DOCUMENT_CATEGORIES.map(category => {
+                   const keywords = formData.categoryKeywords[category] || [];
+
+                   return (
+                     <div key={category} className="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-sm">
+                        <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 font-bold text-gray-700 flex justify-between items-center">
+                           <span>{category}</span>
+                        </div>
+                        
+                        <div className="p-4">
+                           <div className="bg-gray-50 rounded border border-gray-200 p-2 min-h-[80px] space-y-2">
+                            {keywords.length === 0 ? (
+                                <p className="text-xs text-gray-400 italic p-2">Nenhuma palavra-chave definida.</p>
+                            ) : (
+                                keywords.map((kw, idx) => (
+                                    <div key={idx} className="flex justify-between items-center bg-white border border-gray-200 rounded px-2 py-1">
+                                    <span className="text-sm text-gray-700">{kw}</span>
+                                    <button 
+                                        onClick={() => removeKeyword(category, kw)}
+                                        className="text-gray-400 hover:text-red-500 p-1"
+                                        title="Remover palavra-chave"
+                                    >
+                                        <Trash className="w-3 h-3" />
+                                    </button>
+                                    </div>
+                                ))
+                            )}
+                           </div>
+                        </div>
+                     </div>
+                   );
+                 })}
                </div>
             </div>
+          )}
+
+          {activeTab === 'due_dates' && (
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 space-y-8">
+                  <div className="mb-6">
+                    <h3 className="font-semibold text-gray-800">Regras de Vencimento</h3>
+                    <p className="text-sm text-gray-500">Configure como o sistema calcula a data de vencimento para cada categoria de documento.</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {DOCUMENT_CATEGORIES.map(category => {
+                       const rule = formData.categoryRules[category] || { day: 10, rule: 'fixo' };
+                       return (
+                          <div key={category} className="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-sm">
+                              <div className="bg-blue-50 px-4 py-3 border-b border-blue-100 font-bold text-blue-800 flex justify-between items-center">
+                                  <span>{category}</span>
+                                  <Clock className="w-4 h-4 text-blue-400" />
+                              </div>
+                              <div className="p-4 space-y-4">
+                                  <div>
+                                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Regra</label>
+                                    <select 
+                                      className="w-full text-sm border border-gray-300 rounded px-2 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                                      value={rule.rule}
+                                      onChange={(e) => updateRule(category, 'rule', e.target.value)}
+                                    >
+                                      <option value="fixo">Dia Fixo</option>
+                                      <option value="antecipado">Antecipar se Feriado/FDS</option>
+                                      <option value="postergado">Postergar se Feriado/FDS</option>
+                                      <option value="quinto_dia_util">Quinto Dia Útil</option>
+                                      <option value="ultimo_dia_util">Último Dia Útil</option>
+                                    </select>
+                                  </div>
+                                  
+                                  {(rule.rule === 'fixo' || rule.rule === 'antecipado' || rule.rule === 'postergado') && (
+                                    <div>
+                                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Dia do Vencimento</label>
+                                        <input 
+                                          type="number" 
+                                          min="1" 
+                                          max="31" 
+                                          className="w-full text-sm border border-gray-300 rounded px-2 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                                          value={rule.day}
+                                          onChange={(e) => updateRule(category, 'day', parseInt(e.target.value))}
+                                        />
+                                    </div>
+                                  )}
+
+                                  <div className="bg-gray-50 p-2 rounded text-xs text-gray-500 border border-gray-100 min-h-[40px]">
+                                    {rule.rule === 'quinto_dia_util' && "Vence no 5º dia útil do mês seguinte."}
+                                    {rule.rule === 'ultimo_dia_util' && "Vence no último dia útil do mês seguinte."}
+                                    {rule.rule === 'antecipado' && `Vence dia ${rule.day}. Se cair em feriado/FDS, antecipa.`}
+                                    {rule.rule === 'postergado' && `Vence dia ${rule.day}. Se cair em feriado/FDS, posterga.`}
+                                    {rule.rule === 'fixo' && `Vence dia ${rule.day}, independente de ser útil.`}
+                                  </div>
+                              </div>
+                          </div>
+                       );
+                    })}
+                  </div>
+              </div>
           )}
         </div>
       </div>

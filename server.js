@@ -150,7 +150,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 });
 
 app.post('/api/send-documents', async (req, res) => {
-    const { documents, subject, messageBody, channels, emailSignature } = req.body;
+    const { documents, subject, messageBody, channels, emailSignature, whatsappTemplate } = req.body;
     let successCount = 0;
     let errors = [];
     let sentIds = [];
@@ -183,15 +183,23 @@ app.post('/api/send-documents', async (req, res) => {
                 continue;
             }
 
-            // Preparar Anexos físicos
+            // Preparar Anexos físicos e Ordernar por Vencimento
+            const sortedDocs = [...companyDocs].sort((a, b) => {
+                // Formato DD/MM/YYYY
+                const dateA = a.dueDate ? a.dueDate.split('/').reverse().join('') : '99999999';
+                const dateB = b.dueDate ? b.dueDate.split('/').reverse().join('') : '99999999';
+                return dateA.localeCompare(dateB);
+            });
+
             const validAttachments = [];
-            for (const doc of companyDocs) {
+            for (const doc of sortedDocs) {
                 const filePath = path.join(UPLOADS_DIR, doc.serverFilename);
                 if (fs.existsSync(filePath)) {
                     validAttachments.push({
                         filename: doc.docName,
                         path: filePath,
-                        contentType: 'application/pdf' // Assume PDF based on prompt logic, or auto-detect
+                        contentType: 'application/pdf',
+                        docData: doc // Keep ref to doc data
                     });
                 } else {
                     console.error(`Arquivo físico não encontrado: ${filePath}`);
@@ -208,14 +216,14 @@ app.post('/api/send-documents', async (req, res) => {
             if (channels.email && company.email) {
                 try {
                     const finalHtml = buildEmailHtml(messageBody, companyDocs, emailSignature);
-                    const finalSubject = `${subject} - Competência: ${companyDocs[0].competence}`; // Usa competência do primeiro doc
+                    const finalSubject = `${subject} - Competência: ${companyDocs[0].competence}`; 
 
                     await emailTransporter.sendMail({
                         from: process.env.EMAIL_USER,
                         to: company.email,
                         subject: finalSubject,
                         html: finalHtml,
-                        attachments: validAttachments
+                        attachments: validAttachments.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
                     });
                     console.log(`E-mail (agrupado) enviado para ${company.email}`);
                 } catch (e) {
@@ -226,23 +234,35 @@ app.post('/api/send-documents', async (req, res) => {
             }
 
             // --- Envio WHATSAPP ---
-            // WhatsApp Web.js não suporta envio de múltiplos arquivos em 1 mensagem facilmente como anexo agrupado.
-            // Enviaremos 1 mensagem de texto + N arquivos.
             if (channels.whatsapp && company.whatsapp && clientReady) {
                 try {
                     let number = company.whatsapp.replace(/\D/g, '');
                     if (!number.startsWith('55')) number = '55' + number;
                     const chatId = `${number}@c.us`;
 
-                    // 1. Mensagem de texto
-                    await client.sendMessage(chatId, `${subject}\n\n${messageBody}`);
+                    // 1. Gerar lista de arquivos organizada
+                    const listaArquivos = validAttachments.map(att => 
+                        `• ${att.docData.docName} (${att.docData.category}, Venc: ${att.docData.dueDate || 'N/A'})`
+                    ).join('\n');
 
-                    // 2. Arquivos
+                    // 2. Processar Template (O Template vem do usuário)
+                    // Substitui variáveis simples se existirem no template vindo do front
+                    let userMessage = whatsappTemplate || messageBody;
+                    userMessage = userMessage.replace('{competencia}', companyDocs[0].competence);
+                    userMessage = userMessage.replace('{empresa}', company.name);
+
+                    // 3. Montar Mensagem Completa (Lógica do Python)
+                    const mensagemCompleta = `*📄 Olá!* \n\n${userMessage}\n\n*Arquivos enviados:*\n${listaArquivos}\n\n_Esses arquivos também foram enviados por e-mail_\n\nAtenciosamente,\nLucas Araújo`;
+
+                    // 4. Enviar Texto
+                    await client.sendMessage(chatId, mensagemCompleta);
+
+                    // 5. Enviar Arquivos
                     for (const att of validAttachments) {
                         const media = MessageMedia.fromFilePath(att.path);
                         media.filename = att.filename;
                         await client.sendMessage(chatId, media);
-                        // Pequeno delay para evitar flood/block
+                        // Pequeno delay
                         await new Promise(r => setTimeout(r, 1000));
                     }
                     console.log(`WhatsApp enviado para ${number}`);
@@ -255,11 +275,9 @@ app.post('/api/send-documents', async (req, res) => {
 
             // --- PÓS ENVIO (Logs e Status) ---
             for (const doc of companyDocs) {
-                // Registrar Log Individual
                 db.run(`INSERT INTO sent_logs (companyName, docName, category, sentAt, channels, status) VALUES (?, ?, ?, datetime('now', 'localtime'), ?, 'success')`, 
                     [company.name, doc.docName, doc.category, JSON.stringify(channels)]);
                 
-                // Atualizar status
                 db.run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, 'sent') ON CONFLICT(companyId, category, competence) DO UPDATE SET status='sent'`, 
                     [doc.companyId, doc.category, doc.competence]);
 

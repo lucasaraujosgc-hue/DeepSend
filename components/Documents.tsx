@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive, Loader2, FilePlus } from 'lucide-react';
 import { DOCUMENT_CATEGORIES } from '../constants';
@@ -121,7 +122,7 @@ const Documents: React.FC<DocumentsProps> = ({
       setProcessing(true);
       setProcessingResults(null);
       
-      const calculatedDates = calcularTodosVencimentos(processingCompetence);
+      const calculatedDates = calcularTodosVencimentos(processingCompetence, userSettings.categoryRules);
       let processedCount = 0;
       let filteredCount = 0;
 
@@ -196,7 +197,7 @@ const Documents: React.FC<DocumentsProps> = ({
   const processZipFile = async (zipFile: File) => {
       setProcessing(true);
       setProcessingResults(null);
-      const calculatedDates = calcularTodosVencimentos(processingCompetence);
+      const calculatedDates = calcularTodosVencimentos(processingCompetence, userSettings.categoryRules);
 
       try {
         const zip = await JSZip.loadAsync(zipFile);

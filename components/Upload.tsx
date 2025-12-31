@@ -1,9 +1,11 @@
+
 import React, { useState, useEffect } from 'react';
 import { Upload as UploadIcon, X, FileText, Calendar, AlertCircle, Loader2 } from 'lucide-react';
 import { DOCUMENT_CATEGORIES } from '../constants';
 import { calcularTodosVencimentos } from '../utils/dateHelpers';
-import { UploadedFile, Company } from '../types';
+import { UploadedFile, Company, UserSettings } from '../types';
 import { api } from '../services/api';
+import { DEFAULT_USER_SETTINGS } from '../constants'; // Fallback
 
 interface UploadProps {
   preFillData?: {
@@ -11,9 +13,11 @@ interface UploadProps {
     competence: string;
   } | null;
   onUploadSuccess: (files: UploadedFile[], companyId: number, competence: string) => void;
+  // Make userSettings optional to maintain backward compatibility if parent doesn't update immediately, though in App.tsx we updated it.
+  userSettings?: UserSettings; 
 }
 
-const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess }) => {
+const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSettings = DEFAULT_USER_SETTINGS }) => {
   const [competence, setCompetence] = useState('');
   const [selectedCompanyId, setSelectedCompanyId] = useState<number | string>('');
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -45,7 +49,8 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess }) => {
 
   useEffect(() => {
     if (competence.match(/^\d{2}\/\d{4}$/)) {
-        const dates = calcularTodosVencimentos(competence);
+        // Use userSettings.categoryRules
+        const dates = calcularTodosVencimentos(competence, userSettings.categoryRules);
         setCalculatedDates(dates);
         setFiles(prev => prev.map(f => {
             if (dates[f.category]) {
@@ -54,7 +59,7 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess }) => {
             return f;
         }));
     }
-  }, [competence]);
+  }, [competence, userSettings]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -83,6 +88,7 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess }) => {
       let category = '';
       let dueDate = '';
 
+      // Simple heuristic for default category on upload (can be overridden by backend or user)
       if (nameLower.includes('contracheque')) category = 'Contracheque';
       else if (nameLower.includes('fgts')) category = 'FGTS';
       else if (nameLower.includes('inss')) category = 'INSS';
@@ -91,6 +97,9 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess }) => {
       else if (nameLower.includes('honor')) category = 'Honorários';
       else if (nameLower.includes('fiscais') || nameLower.includes('nota')) category = 'Notas Fiscais';
       
+      // Fallback if empty, user must select
+      if (!category) category = DOCUMENT_CATEGORIES[0];
+
       if (category && calculatedDates[category]) {
           dueDate = calculatedDates[category];
       }
@@ -98,7 +107,7 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess }) => {
       return {
         name: file.name,
         size: file.size,
-        category: category || DOCUMENT_CATEGORIES[0],
+        category: category,
         dueDate: dueDate,
         file: file
       };

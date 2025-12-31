@@ -1,3 +1,4 @@
+
 export interface Company {
   id: number;
   name: string;
@@ -74,9 +75,15 @@ export interface UploadedFile {
   serverFilename?: string;
 }
 
+export interface CategoryRule {
+  day: number;
+  rule: 'antecipado' | 'postergado' | 'quinto_dia_util' | 'ultimo_dia_util' | 'fixo';
+}
+
 export interface UserSettings {
   emailSignature: string;
   whatsappTemplate: string;
   visibleDocumentCategories: string[];
   categoryKeywords: Record<string, string[]>;
+  categoryRules: Record<string, CategoryRule>;
 }

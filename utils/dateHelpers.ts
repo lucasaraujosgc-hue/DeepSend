@@ -1,3 +1,6 @@
+
+import { CategoryRule } from "../types";
+
 // Fixed holidays list (Day-Month)
 // (1, 1) -> "01-01"
 const FIXED_HOLIDAYS = [
@@ -8,7 +11,7 @@ const FIXED_HOLIDAYS = [
   '10-12', // Nossa Senhora Aparecida
   '11-02', // Finados
   '11-15', // Proclamação da República
-  '11-20', // Consciência Negra (Adicionado)
+  '11-20', // Consciência Negra
   '12-25'  // Natal
 ];
 
@@ -88,7 +91,7 @@ export const calcularQuintoDiaUtil = (mes: number, ano: number): string => {
   return formatarData(finalDate);
 };
 
-export const calcularVencimentoComRegra = (mes: number, ano: number, diaVencimento: number, regra: 'antecipado' | 'postergado'): string => {
+export const calcularVencimentoComRegra = (mes: number, ano: number, diaVencimento: number, regra: 'antecipado' | 'postergado' | 'fixo'): string => {
   const next = getNextMonth(mes, ano);
   
   // Create date object for the target due day (mes - 1 because Date uses 0-11)
@@ -99,6 +102,8 @@ export const calcularVencimentoComRegra = (mes: number, ano: number, diaVencimen
   if (date.getMonth() !== (next.mes - 1)) {
      date = new Date(next.ano, next.mes, 0); // Último dia do mês correto
   }
+
+  if (regra === 'fixo') return formatarData(date);
 
   if (!isDiaUtil(date)) {
       if (regra === 'antecipado') {
@@ -132,7 +137,7 @@ export const calcularUltimoDiaUtil = (mes: number, ano: number): string => {
   return formatarData(date);
 };
 
-export const calcularTodosVencimentos = (competencia: string): Record<string, string> => {
+export const calcularTodosVencimentos = (competencia: string, categoryRules: Record<string, CategoryRule>): Record<string, string> => {
   if (!competencia || !competencia.includes('/')) return {};
   
   const [mesStr, anoStr] = competencia.split('/');
@@ -141,14 +146,38 @@ export const calcularTodosVencimentos = (competencia: string): Record<string, st
 
   if (isNaN(mes) || isNaN(ano)) return {};
 
-  return {
-      'Contracheque': calcularQuintoDiaUtil(mes, ano),
-      'Folha de Pagamento': calcularQuintoDiaUtil(mes, ano), 
-      'FGTS': calcularVencimentoComRegra(mes, ano, 7, 'antecipado'), // FGTS dia 7 (antecipado)
-      'INSS': calcularVencimentoComRegra(mes, ano, 20, 'antecipado'), // INSS dia 20 (antecipado)
-      // Simples Nacional: Vence dia 20. Se feriado, posterga para o próximo dia útil.
-      'Simples Nacional': calcularVencimentoComRegra(mes, ano, 20, 'postergado'),
-      'Parcelamento': calcularUltimoDiaUtil(mes, ano),
-      'Honorários': calcularVencimentoComRegra(mes, ano, 10, 'postergado'), 
-  };
+  const vencimentos: Record<string, string> = {};
+
+  // Default hardcoded logic if no rules provided (Fallback)
+  if (!categoryRules || Object.keys(categoryRules).length === 0) {
+      // Fallback (Legacy)
+      return {
+          'Contracheque': calcularQuintoDiaUtil(mes, ano),
+          'Folha de Pagamento': calcularQuintoDiaUtil(mes, ano), 
+          'FGTS': calcularVencimentoComRegra(mes, ano, 7, 'antecipado'),
+          'INSS': calcularVencimentoComRegra(mes, ano, 20, 'antecipado'),
+          'Simples Nacional': calcularVencimentoComRegra(mes, ano, 20, 'postergado'),
+          'Parcelamento': calcularUltimoDiaUtil(mes, ano),
+          'Honorários': calcularVencimentoComRegra(mes, ano, 10, 'postergado'), 
+      };
+  }
+
+  // Dynamic Logic based on User Settings
+  for (const [category, config] of Object.entries(categoryRules)) {
+      try {
+          if (config.rule === 'quinto_dia_util') {
+              vencimentos[category] = calcularQuintoDiaUtil(mes, ano);
+          } else if (config.rule === 'ultimo_dia_util') {
+              vencimentos[category] = calcularUltimoDiaUtil(mes, ano);
+          } else {
+              // antecipado, postergado, fixo
+              vencimentos[category] = calcularVencimentoComRegra(mes, ano, config.day, config.rule);
+          }
+      } catch (e) {
+          console.error(`Erro calculando data para ${category}`, e);
+          vencimentos[category] = '';
+      }
+  }
+
+  return vencimentos;
 };

@@ -1,3 +1,4 @@
+
 import { Company, Task, TaskStatus, TaskPriority, Document, ScheduledMessage, UserSettings } from './types';
 
 export const DOCUMENT_CATEGORIES = [
@@ -45,5 +46,15 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
     'INSS': ['cp seguros', 'cp segurados'],
     'Notas Fiscais': ['nota fiscal'],
     'Honorários': ['um banco', 'cora.com.br']
+  },
+  categoryRules: {
+    'Simples Nacional': { day: 20, rule: 'postergado' },
+    'FGTS': { day: 7, rule: 'antecipado' },
+    'INSS': { day: 20, rule: 'antecipado' },
+    'Honorários': { day: 10, rule: 'postergado' },
+    'Folha de Pagamento': { day: 5, rule: 'quinto_dia_util' },
+    'Contracheque': { day: 5, rule: 'quinto_dia_util' },
+    'Parcelamento': { day: 0, rule: 'ultimo_dia_util' },
+    'Notas Fiscais': { day: 1, rule: 'fixo' }, // Exemplo
   }
 };
