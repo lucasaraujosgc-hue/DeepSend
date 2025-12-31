@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { Send as SendIcon, Mail, MessageCircle, FileText, Trash, Clock, Check, Info, ArrowLeft, X, CheckSquare, Calendar } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Send as SendIcon, Mail, MessageCircle, FileText, Trash, Clock, Check, Info, ArrowLeft, X, CheckSquare, Calendar, Loader2 } from 'lucide-react';
 import { Document, Company } from '../types';
-import { MOCK_COMPANIES } from '../constants';
+import { api } from '../services/api';
 
 interface SendProps {
   documents: Document[];
@@ -27,6 +27,18 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
   const [scheduleDate, setScheduleDate] = useState('');
   const [scheduleChannels, setScheduleChannels] = useState({ email: true, whatsapp: false });
 
+  // Real Company Data
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [loadingCompanies, setLoadingCompanies] = useState(false);
+
+  useEffect(() => {
+    setLoadingCompanies(true);
+    api.getCompanies()
+        .then(data => setCompanies(data))
+        .catch(err => console.error(err))
+        .finally(() => setLoadingCompanies(false));
+  }, []);
+
   // Filter documents: pending AND matches competence
   const pendingDocs = documents.filter(doc => 
     doc.status === 'pending' && 
@@ -42,7 +54,7 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
     return acc;
   }, {} as Record<number, Document[]>);
 
-  const getCompanyDetails = (id: number) => MOCK_COMPANIES.find(c => c.id === id);
+  const getCompanyDetails = (id: number) => companies.find(c => c.id === id);
 
   const toggleDocSelection = (id: number) => {
     setSelectedDocs(prev => 
@@ -202,6 +214,7 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
           <div className="flex justify-between items-center border-b pb-2 mb-4">
               <h4 className="text-xl font-bold text-gray-800 flex items-center gap-2">
                   <FileText className="w-6 h-6 text-blue-600" /> Documentos Pendentes
+                  {loadingCompanies && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
               </h4>
               {pendingDocs.length > 0 && (
                   <button 
@@ -231,10 +244,10 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
                       <div key={companyId} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden mb-4">
                           <div className="bg-blue-600 text-white p-4 flex justify-between items-center">
                               <div>
-                                  <h5 className="font-bold text-lg">{company?.name || 'Empresa Desconhecida'}</h5>
+                                  <h5 className="font-bold text-lg">{company?.name || `Empresa ID: ${companyId}`}</h5>
                                   <div className="text-sm opacity-90 flex gap-3">
-                                      <span className="flex items-center gap-1"><Mail className="w-3 h-3" /> {company?.email}</span>
-                                      <span className="flex items-center gap-1"><MessageCircle className="w-3 h-3" /> {company?.whatsapp}</span>
+                                      <span className="flex items-center gap-1"><Mail className="w-3 h-3" /> {company?.email || 'N/A'}</span>
+                                      <span className="flex items-center gap-1"><MessageCircle className="w-3 h-3" /> {company?.whatsapp || 'N/A'}</span>
                                   </div>
                               </div>
                               <label className="flex items-center gap-2 cursor-pointer bg-blue-700 px-3 py-1 rounded hover:bg-blue-800 transition-colors">

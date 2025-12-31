@@ -1,22 +1,47 @@
-import React, { useState } from 'react';
-import { Mail, MessageCircle, Calendar, Send, CheckSquare, Square, ArrowLeft } from 'lucide-react';
-import { MOCK_COMPANIES } from '../constants';
+import React, { useState, useEffect } from 'react';
+import { Mail, MessageCircle, Calendar, Send, CheckSquare, Square, ArrowLeft, Loader2 } from 'lucide-react';
+import { Company } from '../types';
+import { api } from '../services/api';
 
 const BulkSend: React.FC = () => {
   const [companyType, setCompanyType] = useState<'normal' | 'mei'>('normal');
-  const [selectedCompanies, setSelectedCompanies] = useState<number[]>(MOCK_COMPANIES.map(c => c.id));
   const [schedule, setSchedule] = useState(false);
+  
+  // Real Data
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedCompanies, setSelectedCompanies] = useState<number[]>([]);
 
-  const filteredCompanies = MOCK_COMPANIES.filter(c => {
+  useEffect(() => {
+    setLoading(true);
+    api.getCompanies()
+        .then(data => {
+            setCompanies(data);
+            // Default select all matches current type logic if needed, but safer to start clean
+            // Or select all of the default type
+            const defaultTypeIds = data.filter(c => c.type !== 'MEI').map(c => c.id);
+            setSelectedCompanies(defaultTypeIds);
+        })
+        .catch(err => console.error(err))
+        .finally(() => setLoading(false));
+  }, []);
+
+  const filteredCompanies = companies.filter(c => {
       if (companyType === 'normal') return c.type !== 'MEI';
       return c.type === 'MEI';
   });
 
   const toggleSelectAll = () => {
-      if (selectedCompanies.length === filteredCompanies.length) {
-          setSelectedCompanies([]);
+      const filteredIds = filteredCompanies.map(c => c.id);
+      const allSelected = filteredIds.every(id => selectedCompanies.includes(id));
+      
+      if (allSelected) {
+          // Deselect only the visible ones
+          setSelectedCompanies(prev => prev.filter(id => !filteredIds.includes(id)));
       } else {
-          setSelectedCompanies(filteredCompanies.map(c => c.id));
+          // Add missing visible ones
+          const newSelection = [...new Set([...selectedCompanies, ...filteredIds])];
+          setSelectedCompanies(newSelection);
       }
   };
 
@@ -27,6 +52,11 @@ const BulkSend: React.FC = () => {
           setSelectedCompanies(prev => [...prev, id]);
       }
   };
+  
+  // Check if all filtered are selected
+  const areAllFilteredSelected = filteredCompanies.length > 0 && filteredCompanies.every(c => selectedCompanies.includes(c.id));
+
+  if (loading) return <div className="flex justify-center p-10"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
 
   return (
     <div className="space-y-6">
@@ -84,13 +114,15 @@ const BulkSend: React.FC = () => {
 
           <div className="mb-6">
               <div className="flex justify-between items-center mb-2 bg-gray-100 p-2 rounded-t-lg border-b border-gray-200">
-                  <h3 className="font-bold text-gray-700 px-2">Empresas Destinatárias ({selectedCompanies.length})</h3>
+                  <h3 className="font-bold text-gray-700 px-2">Empresas Destinatárias ({selectedCompanies.filter(id => filteredCompanies.some(c => c.id === id)).length})</h3>
                   <button onClick={toggleSelectAll} className="text-sm text-blue-600 hover:underline px-2 font-medium">
-                      {selectedCompanies.length === filteredCompanies.length ? 'Desmarcar Todas' : 'Selecionar Todas'}
+                      {areAllFilteredSelected ? 'Desmarcar Todas' : 'Selecionar Todas'}
                   </button>
               </div>
               <div className="border border-gray-200 rounded-b-lg max-h-60 overflow-y-auto">
-                  {filteredCompanies.map(company => (
+                  {filteredCompanies.length === 0 ? (
+                      <div className="p-4 text-center text-gray-500">Nenhuma empresa encontrada para este tipo.</div>
+                  ) : filteredCompanies.map(company => (
                       <div key={company.id} className="flex items-center p-3 border-b last:border-0 hover:bg-gray-50">
                           <input 
                             type="checkbox" 

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Upload as UploadIcon, X, FileText, Calendar, AlertCircle } from 'lucide-react';
-import { MOCK_COMPANIES, DOCUMENT_CATEGORIES } from '../constants';
+import { Upload as UploadIcon, X, FileText, Calendar, AlertCircle, Loader2 } from 'lucide-react';
+import { DOCUMENT_CATEGORIES } from '../constants';
 import { calcularTodosVencimentos } from '../utils/dateHelpers';
-import { UploadedFile } from '../types';
+import { UploadedFile, Company } from '../types';
+import { api } from '../services/api';
 
 interface UploadProps {
   preFillData?: {
@@ -19,8 +20,19 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess }) => {
   const [calculatedDates, setCalculatedDates] = useState<Record<string, string>>({});
   const [isDragging, setIsDragging] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  
+  // New state for API companies
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [loadingCompanies, setLoadingCompanies] = useState(false);
 
   useEffect(() => {
+    // Load companies from API
+    setLoadingCompanies(true);
+    api.getCompanies()
+        .then(data => setCompanies(data))
+        .catch(err => console.error("Erro ao buscar empresas", err))
+        .finally(() => setLoadingCompanies(false));
+
     // If pre-fill data exists, use it
     if (preFillData) {
       setCompetence(preFillData.competence);
@@ -162,14 +174,18 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess }) => {
             
             <div className="space-y-4">
                 <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Empresa</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+                        Empresa 
+                        {loadingCompanies && <Loader2 className="w-3 h-3 animate-spin" />}
+                    </label>
                     <select 
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                         value={selectedCompanyId}
                         onChange={e => setSelectedCompanyId(e.target.value)}
+                        disabled={loadingCompanies}
                     >
                         <option value="">Selecione uma empresa...</option>
-                        {MOCK_COMPANIES.map(c => (
+                        {companies.map(c => (
                             <option key={c.id} value={c.id}>{c.name} ({c.docNumber})</option>
                         ))}
                     </select>

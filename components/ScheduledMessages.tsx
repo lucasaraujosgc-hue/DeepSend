@@ -1,15 +1,30 @@
-import React, { useState } from 'react';
-import { CalendarClock, Edit, Trash, Plus, CheckCircle, XCircle } from 'lucide-react';
-import { MOCK_MESSAGES, MOCK_COMPANIES } from '../constants';
-import { ScheduledMessage } from '../types';
+import React, { useState, useEffect } from 'react';
+import { CalendarClock, Edit, Trash, Plus, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { MOCK_MESSAGES } from '../constants';
+import { ScheduledMessage, Company } from '../types';
+import { api } from '../services/api';
 
 const ScheduledMessages: React.FC = () => {
   const [view, setView] = useState<'list' | 'edit'>('list');
   const [messages, setMessages] = useState(MOCK_MESSAGES);
   const [editingId, setEditingId] = useState<number | null>(null);
 
+  // Data State
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [loadingCompanies, setLoadingCompanies] = useState(false);
+
   // Mock form state for editing
   const [formData, setFormData] = useState<Partial<ScheduledMessage>>({});
+
+  useEffect(() => {
+    if (view === 'edit') {
+        setLoadingCompanies(true);
+        api.getCompanies()
+            .then(data => setCompanies(data))
+            .catch(e => console.error(e))
+            .finally(() => setLoadingCompanies(false));
+    }
+  }, [view]);
 
   const handleEdit = (msg: ScheduledMessage) => {
       setFormData(msg);
@@ -68,7 +83,10 @@ const ScheduledMessages: React.FC = () => {
                       </div>
 
                       <div>
-                          <label className="block text-sm font-semibold text-gray-700 mb-2">Empresas Alvo</label>
+                          <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                            Empresas Alvo
+                            {loadingCompanies && <Loader2 className="w-3 h-3 animate-spin" />}
+                          </label>
                           <select className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-3">
                               <option value="normal">Todas Empresas Normais</option>
                               <option value="mei">Todas Empresas MEI</option>
@@ -76,7 +94,7 @@ const ScheduledMessages: React.FC = () => {
                           </select>
                           
                           <div className="border border-gray-200 rounded-lg p-3 max-h-40 overflow-y-auto bg-gray-50">
-                                {MOCK_COMPANIES.map(c => (
+                                {companies.map(c => (
                                     <label key={c.id} className="flex items-center gap-2 py-1 cursor-pointer hover:bg-gray-100 px-2 rounded">
                                         <input type="checkbox" className="rounded text-blue-600" />
                                         <span className="text-sm">{c.name}</span>

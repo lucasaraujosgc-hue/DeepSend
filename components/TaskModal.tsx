@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Trash } from 'lucide-react';
-import { Task, TaskPriority, TaskStatus } from '../types';
-import { MOCK_COMPANIES } from '../constants';
+import { X, Trash, Loader2 } from 'lucide-react';
+import { Task, TaskPriority, TaskStatus, Company } from '../types';
+import { api } from '../services/api';
 
 interface TaskModalProps {
   isOpen: boolean;
@@ -38,6 +38,19 @@ const TaskModal: React.FC<TaskModalProps> = ({ isOpen, onClose, task, onSave, on
     companyId: undefined,
   });
 
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [loadingCompanies, setLoadingCompanies] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+        setLoadingCompanies(true);
+        api.getCompanies()
+            .then(data => setCompanies(data))
+            .catch(err => console.error("Erro ao carregar empresas", err))
+            .finally(() => setLoadingCompanies(false));
+    }
+  }, [isOpen]);
+
   useEffect(() => {
     if (task) {
       setFormData(task);
@@ -73,8 +86,8 @@ const TaskModal: React.FC<TaskModalProps> = ({ isOpen, onClose, task, onSave, on
     }
   };
 
-  const companiesNormal = MOCK_COMPANIES.filter(c => c.type !== 'MEI');
-  const companiesMei = MOCK_COMPANIES.filter(c => c.type === 'MEI');
+  const companiesNormal = companies.filter(c => c.type !== 'MEI');
+  const companiesMei = companies.filter(c => c.type === 'MEI');
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -216,14 +229,17 @@ const TaskModal: React.FC<TaskModalProps> = ({ isOpen, onClose, task, onSave, on
           </div>
 
           <div className="border-t border-gray-100 pt-4">
-             <h4 className="font-semibold text-gray-600 mb-3">Vínculo</h4>
+             <h4 className="font-semibold text-gray-600 mb-3 flex items-center gap-2">
+                Vínculo {loadingCompanies && <Loader2 className="w-3 h-3 animate-spin" />}
+             </h4>
              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Empresa (Normal)</label>
                   <select 
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none disabled:bg-gray-100"
                     value={formData.companyId}
                     onChange={e => setFormData({...formData, companyId: Number(e.target.value), targetCompanyType: 'normal'})}
+                    disabled={loadingCompanies}
                   >
                     <option value="">Selecione...</option>
                     {companiesNormal.map(c => (
@@ -234,9 +250,10 @@ const TaskModal: React.FC<TaskModalProps> = ({ isOpen, onClose, task, onSave, on
                <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Empresa (MEI)</label>
                   <select 
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none disabled:bg-gray-100"
                     value={formData.companyId}
                     onChange={e => setFormData({...formData, companyId: Number(e.target.value), targetCompanyType: 'mei'})}
+                    disabled={loadingCompanies}
                   >
                     <option value="">Selecione...</option>
                     {companiesMei.map(c => (

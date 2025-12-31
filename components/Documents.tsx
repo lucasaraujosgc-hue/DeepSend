@@ -66,8 +66,8 @@ const Documents: React.FC<DocumentsProps> = ({
       fetchData();
   }, [activeCompetence]);
 
-  // Use visible categories from settings, fall back to all if empty
-  const defaultVisibleCategories = userSettings.visibleDocumentCategories.length > 0 
+  // Use visible categories from settings for the Matrix Columns
+  const visibleMatrixCategories = userSettings.visibleDocumentCategories.length > 0 
     ? userSettings.visibleDocumentCategories 
     : DOCUMENT_CATEGORIES.slice(0, 8);
 
@@ -169,10 +169,10 @@ const Documents: React.FC<DocumentsProps> = ({
     );
   };
   const toggleSelectAllCategories = () => {
-    if (selectedCategories.length === defaultVisibleCategories.length) {
+    if (selectedCategories.length === DOCUMENT_CATEGORIES.length) {
       setSelectedCategories([]);
     } else {
-      setSelectedCategories(defaultVisibleCategories);
+      setSelectedCategories(DOCUMENT_CATEGORIES);
     }
   };
 
@@ -229,7 +229,7 @@ const Documents: React.FC<DocumentsProps> = ({
       if (matrixCategoryFilter !== 'all') {
           return [matrixCategoryFilter];
       }
-      return defaultVisibleCategories;
+      return visibleMatrixCategories;
   };
 
   // 3. Filter Rows (Companies) based on Matrix Filters
@@ -308,8 +308,6 @@ const Documents: React.FC<DocumentsProps> = ({
 
       {/* Automatic Processing Card */}
       <div className="bg-white rounded-xl shadow-sm border border-blue-100 overflow-hidden">
-        {/* ... (Conteúdo de Processamento Automático mantido, apenas atualizando estado das empresas) ... */}
-        {/* Simplified for brevity - logic uses `companies` state which is now fetched from API */}
          <div className="bg-blue-50 p-4 border-b border-blue-100 flex items-center gap-2 text-blue-800">
             <SettingsIcon className="w-5 h-5" />
             <h3 className="font-bold">Processamento Automático</h3>
@@ -395,7 +393,7 @@ const Documents: React.FC<DocumentsProps> = ({
                   <div className="relative group">
                     <button className="w-full text-left border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white flex justify-between items-center">
                       <span className="truncate">
-                        {selectedCategories.length === 0 ? 'Padrão (Configurações)' : `${selectedCategories.length} selecionadas`}
+                        {selectedCategories.length === 0 ? 'Todas as Categorias' : `${selectedCategories.length} selecionadas`}
                       </span>
                     </button>
                     <div className="absolute top-full left-0 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 hidden group-hover:block hover:block p-2 max-h-96 overflow-y-auto">
@@ -403,12 +401,12 @@ const Documents: React.FC<DocumentsProps> = ({
                           <input 
                             type="checkbox" 
                             className="rounded text-blue-600"
-                            checked={selectedCategories.length === defaultVisibleCategories.length}
+                            checked={selectedCategories.length === DOCUMENT_CATEGORIES.length}
                             onChange={toggleSelectAllCategories}
                           />
-                          <span className="text-sm font-bold text-gray-700">Padrão</span>
+                          <span className="text-sm font-bold text-gray-700">Todas</span>
                         </label>
-                        {defaultVisibleCategories.map(cat => (
+                        {DOCUMENT_CATEGORIES.map(cat => (
                           <label key={cat} className="flex items-center gap-2 p-1 hover:bg-gray-50 rounded cursor-pointer">
                             <input 
                               type="checkbox" 
@@ -451,7 +449,7 @@ const Documents: React.FC<DocumentsProps> = ({
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         
         <div className="p-4 border-b border-gray-100 bg-gray-50">
-           {/* Filters Bar ... (Kept same) */}
+           {/* Filters Bar */}
            <div className="flex justify-between items-center mb-4">
               <h3 className="font-bold text-gray-700">
                 Matriz de Status - <span className="text-blue-600">{activeCompetence}</span>
@@ -484,7 +482,7 @@ const Documents: React.FC<DocumentsProps> = ({
                    onChange={(e) => setMatrixCategoryFilter(e.target.value)}
                  >
                    <option value="all">Todas as Categorias</option>
-                   {defaultVisibleCategories.map(cat => (
+                   {visibleMatrixCategories.map(cat => (
                      <option key={cat} value={cat}>{cat}</option>
                    ))}
                  </select>
