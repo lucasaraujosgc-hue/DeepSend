@@ -1,11 +1,10 @@
-
 import React, { useState, useEffect } from 'react';
 import { Upload as UploadIcon, X, FileText, Calendar, AlertCircle, Loader2 } from 'lucide-react';
 import { DOCUMENT_CATEGORIES } from '../constants';
 import { calcularTodosVencimentos } from '../utils/dateHelpers';
 import { UploadedFile, Company, UserSettings } from '../types';
 import { api } from '../services/api';
-import { identifyCategory } from '../utils/documentProcessor'; // Import identifyCategory
+import { identifyCategory, extractTextFromPDF } from '../utils/documentProcessor'; 
 import { DEFAULT_USER_SETTINGS } from '../constants';
 
 interface UploadProps {
@@ -25,6 +24,7 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loadingCompanies, setLoadingCompanies] = useState(false);
@@ -81,34 +81,53 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
     }
   };
 
-  const processFiles = (fileList: File[]) => {
-    const newFiles: UploadedFile[] = fileList.map(file => {
-      let category = '';
-      let dueDate = '';
+  const processFiles = async (fileList: File[]) => {
+    setIsProcessing(true);
+    
+    // Process files sequentially or in parallel, but await text extraction
+    const newFiles: UploadedFile[] = [];
 
-      // Tentar identificar categoria usando as palavras-chave configuradas (Vinculações)
-      const identified = identifyCategory(file.name, userSettings.categoryKeywords);
-      if (identified) {
-          category = identified;
-      } else {
-          // Fallback para a primeira categoria se não encontrar
-          category = DOCUMENT_CATEGORIES[0];
-      }
+    for (const file of fileList) {
+        let textContent = file.name; // Padrão: nome do arquivo
 
-      if (category && calculatedDates[category]) {
-          dueDate = calculatedDates[category];
-      }
+        // Se for PDF, tenta extrair o texto
+        if (file.type === 'application/pdf') {
+            try {
+                const extracted = await extractTextFromPDF(file);
+                if (extracted && extracted.length > 10) {
+                    textContent += " " + extracted; // Concatena para ter mais contexto
+                }
+            } catch (err) {
+                console.warn(`Erro lendo PDF ${file.name}`, err);
+            }
+        }
 
-      return {
-        name: file.name,
-        size: file.size,
-        category: category,
-        dueDate: dueDate,
-        file: file
-      };
-    });
+        let category = '';
+        const identified = identifyCategory(textContent, userSettings.categoryKeywords);
+        
+        if (identified) {
+            category = identified;
+        } else {
+            // Fallback: Primeira categoria
+            category = DOCUMENT_CATEGORIES[0];
+        }
+
+        let dueDate = '';
+        if (category && calculatedDates[category]) {
+            dueDate = calculatedDates[category];
+        }
+
+        newFiles.push({
+            name: file.name,
+            size: file.size,
+            category: category,
+            dueDate: dueDate,
+            file: file
+        });
+    }
 
     setFiles(prev => [...prev, ...newFiles]);
+    setIsProcessing(false);
   };
 
   const removeFile = (index: number) => {
@@ -236,7 +255,14 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
         </div>
       </div>
 
-      {files.length > 0 && (
+      {isProcessing && (
+          <div className="text-center p-4">
+              <Loader2 className="w-8 h-8 animate-spin mx-auto text-blue-500" />
+              <p className="text-sm text-gray-500 mt-2">Lendo arquivos e identificando categorias...</p>
+          </div>
+      )}
+
+      {files.length > 0 && !isProcessing && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
               <div className="p-4 border-b border-gray-100 bg-gray-50">
                   <h3 className="font-bold text-gray-700">Arquivos Selecionados ({files.length})</h3>

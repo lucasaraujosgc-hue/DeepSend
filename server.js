@@ -285,7 +285,7 @@ app.post('/api/send-documents', async (req, res) => {
                 }
             }
 
-            // --- PÓS ENVIO (Logs e Status) ---
+            // --- PÓS ENVIO (Logs e Status e Limpeza) ---
             for (const doc of companyDocs) {
                 db.run(`INSERT INTO sent_logs (companyName, docName, category, sentAt, channels, status) VALUES (?, ?, ?, datetime('now', 'localtime'), ?, 'success')`, 
                     [company.name, doc.docName, doc.category, JSON.stringify(channels)]);
@@ -295,6 +295,18 @@ app.post('/api/send-documents', async (req, res) => {
 
                 if (doc.id) sentIds.push(doc.id);
                 successCount++;
+            }
+
+            // --- DELETAR ARQUIVOS APÓS ENVIO ---
+            for (const att of validAttachments) {
+                try {
+                    if (fs.existsSync(att.path)) {
+                        fs.unlinkSync(att.path);
+                        console.log(`Arquivo deletado: ${att.path}`);
+                    }
+                } catch (e) {
+                    console.error(`Erro ao deletar arquivo ${att.path}:`, e.message);
+                }
             }
 
         } catch (e) {
@@ -307,7 +319,8 @@ app.post('/api/send-documents', async (req, res) => {
 });
 
 app.get('/api/recent-sends', (req, res) => {
-    db.all("SELECT * FROM sent_logs ORDER BY id DESC LIMIT 5", (err, rows) => {
+    // ALTERADO LIMIT DE 5 PARA 3
+    db.all("SELECT * FROM sent_logs ORDER BY id DESC LIMIT 3", (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(rows || []);
     });

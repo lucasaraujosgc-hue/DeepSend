@@ -93,12 +93,12 @@ const Dashboard: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Recent Documents Table (Max 5 via API) */}
+        {/* Recent Documents Table (Max 3 via API) */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="p-6 border-b border-gray-100 flex justify-between items-center">
             <h3 className="font-bold text-gray-800 flex items-center gap-2">
               <FileText className="w-5 h-5 text-gray-500" />
-              Últimos 5 Envios
+              Últimos Envios
             </h3>
           </div>
           <div className="overflow-x-auto">

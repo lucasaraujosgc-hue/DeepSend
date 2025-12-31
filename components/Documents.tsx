@@ -1,6 +1,5 @@
-
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive, Loader2, FilePlus } from 'lucide-react';
+import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive, Loader2, FilePlus, AlertTriangle, Trash } from 'lucide-react';
 import { DOCUMENT_CATEGORIES } from '../constants';
 import { UserSettings, Document, Company, UploadedFile } from '../types';
 import { identifyCategory, identifyCompany, extractTextFromPDF } from '../utils/documentProcessor';
@@ -16,6 +15,16 @@ interface DocumentsProps {
   onUploadSuccess: (files: UploadedFile[], companyId: number, competence: string) => void;
 }
 
+interface PreviewFile {
+  id: string; // Temp ID
+  file: File;
+  fileName: string;
+  detectedCompanyId: number | null; // null if not found
+  detectedCategory: string | ''; // empty if not found
+  status: 'ready' | 'error' | 'ignored';
+  size: number;
+}
+
 const Documents: React.FC<DocumentsProps> = ({ 
   userSettings, 
   onNavigateToUpload, 
@@ -23,7 +32,6 @@ const Documents: React.FC<DocumentsProps> = ({
   onToggleStatus,
   onUploadSuccess
 }) => {
-  // Helper to get current competence formatted MM/YYYY
   const getCurrentCompetence = () => {
     const now = new Date();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -32,32 +40,32 @@ const Documents: React.FC<DocumentsProps> = ({
   };
 
   const [competence, setCompetence] = useState(getCurrentCompetence());
-  const [activeCompetence, setActiveCompetence] = useState(getCurrentCompetence()); // Drives the matrix
+  const [activeCompetence, setActiveCompetence] = useState(getCurrentCompetence());
   
-  // Real Data State
   const [companies, setCompanies] = useState<Company[]>([]);
-  const [dbStatuses, setDbStatuses] = useState<any[]>([]); // Statuses from DB
+  const [dbStatuses, setDbStatuses] = useState<any[]>([]); 
   const [loading, setLoading] = useState(true);
 
   // Processing State
   const [localPath, setLocalPath] = useState('');
   const [processingCompetence, setProcessingCompetence] = useState(getCurrentCompetence());
   const [processing, setProcessing] = useState(false);
-  const [processingResults, setProcessingResults] = useState<{total: number, processed: number, filtered: number} | null>(null);
+  const [isUploadingConfirmed, setIsUploadingConfirmed] = useState(false);
   
-  // Matrix Filters
+  // Modal Preview State
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [previewFiles, setPreviewFiles] = useState<PreviewFile[]>([]);
+
   const [matrixSearch, setMatrixSearch] = useState('');
   const [matrixStatusFilter, setMatrixStatusFilter] = useState<'all' | 'pending' | 'sent'>('all');
   const [matrixCategoryFilter, setMatrixCategoryFilter] = useState<string>('all');
 
-  // Processing Filters
+  // Filters for pre-processing logic (optional)
   const [selectedCompanies, setSelectedCompanies] = useState<string[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
 
-  // Ref for the hidden file input
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Fetch Data
   const fetchData = async () => {
       setLoading(true);
       try {
@@ -78,13 +86,11 @@ const Documents: React.FC<DocumentsProps> = ({
       fetchData();
   }, [activeCompetence]);
 
-  // Use visible categories from settings for the Matrix Columns
   const visibleMatrixCategories = userSettings.visibleDocumentCategories.length > 0 
     ? userSettings.visibleDocumentCategories 
     : DOCUMENT_CATEGORIES.slice(0, 8);
 
   const handleProcessClick = () => {
-    // Trigger hidden file input
     if (fileInputRef.current) {
         fileInputRef.current.click();
     }
@@ -94,14 +100,12 @@ const Documents: React.FC<DocumentsProps> = ({
     if (e.target.files && e.target.files.length > 0) {
         const files: File[] = Array.from(e.target.files);
         
-        // Update display text
         if (files.length === 1) {
             setLocalPath(files[0].name);
         } else {
             setLocalPath(`${files.length} arquivos selecionados`);
         }
 
-        // Check if user selected a ZIP file
         const zipFile = files.find(f => f.name.endsWith('.zip') || f.name.endsWith('.rar'));
         
         if (zipFile) {
@@ -109,96 +113,49 @@ const Documents: React.FC<DocumentsProps> = ({
                  alert("Ao selecionar um arquivo ZIP, selecione apenas ele.");
                  return;
              }
-             await processZipFile(zipFile);
+             await prepareZipFile(zipFile);
         } else {
-             // Process regular files (PDFs, Images, etc.)
-             await processMultipleFiles(files);
+             await prepareMultipleFiles(files);
         }
     }
   };
 
-  // Process a list of standard files
-  const processMultipleFiles = async (fileList: File[]) => {
+  const prepareMultipleFiles = async (fileList: File[]) => {
       setProcessing(true);
-      setProcessingResults(null);
-      
-      const calculatedDates = calcularTodosVencimentos(processingCompetence, userSettings.categoryRules);
-      let processedCount = 0;
-      let filteredCount = 0;
+      const tempFiles: PreviewFile[] = [];
 
-      try {
-          for (const file of fileList) {
-             // 1. Extract Text from PDF content (simulating Python logic)
-             let textContent = file.name; // Fallback to filename
-             if (file.type === 'application/pdf') {
-                 const extracted = await extractTextFromPDF(file);
-                 if (extracted && extracted.length > 10) {
-                     textContent = extracted + " " + file.name; // Use both content and filename
-                 }
-             }
-
-             // 2. Identify Category & Company using content
-             const category = identifyCategory(textContent, userSettings.categoryKeywords);
-             const company = identifyCompany(textContent, companies);
-
-             // 3. Filters
-             const categoryFilter = selectedCategories.length > 0 ? selectedCategories : [];
-             const companyFilter = selectedCompanies.length > 0 ? selectedCompanies : [];
-
-             if (!category || (categoryFilter.length > 0 && !categoryFilter.includes(category))) {
-                 console.log(`Arquivo filtrado/ignorado (Categoria): ${file.name} -> ${category || 'Não identificada'}`);
-                 filteredCount++;
-                 continue;
-             }
-
-             if (!company || (companyFilter.length > 0 && !companyFilter.includes(String(company.id)))) {
-                 console.log(`Arquivo filtrado/ignorado (Empresa): ${file.name} -> ${company?.name || 'Não identificada'}`);
-                 filteredCount++;
-                 continue;
-             }
-
-             // 4. Real Upload
-             try {
-                const uploadRes = await api.uploadFile(file);
-                
-                const uploadedFile: UploadedFile = {
-                    name: file.name,
-                    size: file.size,
-                    category: category,
-                    dueDate: calculatedDates[category] || '',
-                    file: file,
-                    serverFilename: uploadRes.filename
-                };
-                
-                // Add to App state
-                onUploadSuccess([uploadedFile], company.id, processingCompetence);
-                processedCount++;
-             } catch (err) {
-                 console.error(`Falha ao enviar arquivo ${file.name}`, err);
-                 filteredCount++; // Consider upload fail as filtered/error
-             }
+      for (const file of fileList) {
+          // Read content for ID
+          let textContent = file.name;
+          if (file.type === 'application/pdf') {
+              try {
+                const extracted = await extractTextFromPDF(file);
+                if (extracted.length > 10) textContent += " " + extracted;
+              } catch(e) { console.warn("PDF Read error", e); }
           }
 
-          setProcessingResults({
-              total: fileList.length,
-              processed: processedCount,
-              filtered: filteredCount
-          });
+          const category = identifyCategory(textContent, userSettings.categoryKeywords);
+          const company = identifyCompany(textContent, companies);
 
-      } catch (e) {
-          console.error("Erro processando arquivos", e);
-          alert("Erro ao processar arquivos.");
-      } finally {
-          setProcessing(false);
-          if (fileInputRef.current) fileInputRef.current.value = '';
+          tempFiles.push({
+              id: Math.random().toString(36).substr(2, 9),
+              file: file,
+              fileName: file.name,
+              detectedCompanyId: company ? company.id : null,
+              detectedCategory: category || '', // Empty if not found
+              status: 'ready',
+              size: file.size
+          });
       }
+
+      setPreviewFiles(tempFiles);
+      setProcessing(false);
+      setShowPreviewModal(true);
+      if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const processZipFile = async (zipFile: File) => {
+  const prepareZipFile = async (zipFile: File) => {
       setProcessing(true);
-      setProcessingResults(null);
-      const calculatedDates = calcularTodosVencimentos(processingCompetence, userSettings.categoryRules);
-
       try {
         const zip = await JSZip.loadAsync(zipFile);
         const entries: {name: string, obj: any}[] = [];
@@ -209,68 +166,38 @@ const Documents: React.FC<DocumentsProps> = ({
             }
         });
 
-        let processedCount = 0;
-        let filteredCount = 0;
+        const tempFiles: PreviewFile[] = [];
 
         for (const entry of entries) {
             const fileName = entry.name;
             const simpleName = fileName.split('/').pop() || fileName;
-
-            // Convert ZipObject to Blob/File to read content
             const blob = await entry.obj.async("blob");
             const file = new File([blob], simpleName, { type: blob.type || 'application/pdf' });
 
-            // 1. Extract Text
             let textContent = simpleName; 
             if (simpleName.toLowerCase().endsWith('.pdf')) {
-                 const extracted = await extractTextFromPDF(file);
-                 if (extracted && extracted.length > 10) {
-                     textContent = extracted + " " + simpleName;
-                 }
+                 try {
+                     const extracted = await extractTextFromPDF(file);
+                     if (extracted.length > 10) textContent += " " + extracted;
+                 } catch(e) {}
             }
 
-            // 2. Identify
             const category = identifyCategory(textContent, userSettings.categoryKeywords);
             const company = identifyCompany(textContent, companies);
 
-            const categoryFilter = selectedCategories.length > 0 ? selectedCategories : [];
-            const companyFilter = selectedCompanies.length > 0 ? selectedCompanies : [];
-
-            if (!category || (categoryFilter.length > 0 && !categoryFilter.includes(category))) {
-                filteredCount++;
-                continue;
-            }
-
-            if (!company || (companyFilter.length > 0 && !companyFilter.includes(String(company.id)))) {
-                filteredCount++;
-                continue;
-            }
-
-            try {
-                const uploadRes = await api.uploadFile(file);
-                
-                const uploadedFile: UploadedFile = {
-                    name: simpleName,
-                    size: file.size,
-                    category: category,
-                    dueDate: calculatedDates[category] || '',
-                    file: file,
-                    serverFilename: uploadRes.filename
-                };
-
-                onUploadSuccess([uploadedFile], company.id, processingCompetence);
-                processedCount++;
-            } catch (err) {
-                 console.error(`Falha ao enviar arquivo extraído ${simpleName}`, err);
-                 filteredCount++;
-            }
+            tempFiles.push({
+                id: Math.random().toString(36).substr(2, 9),
+                file: file,
+                fileName: simpleName,
+                detectedCompanyId: company ? company.id : null,
+                detectedCategory: category || '',
+                status: 'ready',
+                size: file.size
+            });
         }
-
-        setProcessingResults({
-            total: entries.length,
-            processed: processedCount,
-            filtered: filteredCount
-        });
+        
+        setPreviewFiles(tempFiles);
+        setShowPreviewModal(true);
 
       } catch (error) {
           console.error("Error reading zip", error);
@@ -281,7 +208,56 @@ const Documents: React.FC<DocumentsProps> = ({
       }
   };
 
-  // Company Filter Logic
+  // Update preview file data
+  const updatePreview = (id: string, field: 'detectedCompanyId' | 'detectedCategory', value: any) => {
+      setPreviewFiles(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
+  };
+
+  const removePreview = (id: string) => {
+      setPreviewFiles(prev => prev.filter(f => f.id !== id));
+  };
+
+  const confirmProcessing = async () => {
+      setIsUploadingConfirmed(true);
+      const calculatedDates = calcularTodosVencimentos(processingCompetence, userSettings.categoryRules);
+      
+      let processedCount = 0;
+
+      // Group uploads by company to batch the onUploadSuccess calls if we wanted, 
+      // but keeping simple loop is fine for now.
+      
+      for (const item of previewFiles) {
+          if (!item.detectedCompanyId || !item.detectedCategory) continue;
+
+          try {
+              const uploadRes = await api.uploadFile(item.file);
+              
+              const uploadedFile: UploadedFile = {
+                  name: item.fileName,
+                  size: item.size,
+                  category: item.detectedCategory,
+                  dueDate: calculatedDates[item.detectedCategory] || '',
+                  file: item.file,
+                  serverFilename: uploadRes.filename
+              };
+
+              onUploadSuccess([uploadedFile], item.detectedCompanyId, processingCompetence);
+              processedCount++;
+          } catch (e) {
+              console.error(`Falha upload ${item.fileName}`, e);
+          }
+      }
+
+      setIsUploadingConfirmed(false);
+      setShowPreviewModal(false);
+      setPreviewFiles([]);
+      alert(`${processedCount} arquivos processados e enviados para a aba de Envio.`);
+      setLocalPath('');
+  };
+
+
+  // --- Matrix Logic & Filters ---
+
   const toggleCompanySelection = (id: string) => {
     setSelectedCompanies(prev => 
       prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]
@@ -295,7 +271,6 @@ const Documents: React.FC<DocumentsProps> = ({
     }
   };
 
-  // Category Filter Logic
   const toggleCategorySelection = (cat: string) => {
     setSelectedCategories(prev => 
       prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]
@@ -309,20 +284,13 @@ const Documents: React.FC<DocumentsProps> = ({
     }
   };
 
-  // --- Matrix Helpers ---
-
-  // 1. Get Status from DB State
   const getStatus = (companyId: number, category: string) => {
-      // Check DB statuses first
       const dbStatus = dbStatuses.find(s => 
           s.companyId === companyId && 
           s.category === category && 
           s.competence === activeCompetence
       );
-      
       if (dbStatus) return dbStatus.status;
-
-      // Fallback to Documents passed via props (local state for upload session)
       const doc = initialDocuments.find(d => 
         d.companyId === companyId && 
         d.category === category && 
@@ -334,30 +302,22 @@ const Documents: React.FC<DocumentsProps> = ({
   const handleToggleStatusLocal = async (companyId: number, category: string) => {
       const currentStatus = getStatus(companyId, category);
       const newStatus = currentStatus === 'sent' ? 'pending' : 'sent';
-      
-      // Optimistic update locally
       const updatedDbStatuses = [...dbStatuses];
       const existingIdx = updatedDbStatuses.findIndex(s => s.companyId === companyId && s.category === category);
-      
       if (existingIdx >= 0) {
           updatedDbStatuses[existingIdx].status = newStatus;
       } else {
           updatedDbStatuses.push({ companyId, category, competence: activeCompetence, status: newStatus });
       }
       setDbStatuses(updatedDbStatuses);
-
-      // Persist to API
       try {
           await api.updateDocumentStatus(companyId, category, activeCompetence, newStatus);
-          // Also call parent handler to keep sync if needed
           onToggleStatus(companyId, category, activeCompetence);
       } catch (e) {
           console.error("Failed to update status");
-          // Revert optimistic update? For now we just log.
       }
   };
 
-  // 2. Determine Columns (Categories) based on Matrix Filter
   const getMatrixCategories = () => {
       if (matrixCategoryFilter !== 'all') {
           return [matrixCategoryFilter];
@@ -365,14 +325,10 @@ const Documents: React.FC<DocumentsProps> = ({
       return visibleMatrixCategories;
   };
 
-  // 3. Filter Rows (Companies) based on Matrix Filters
   const getMatrixCompanies = () => {
       return companies.filter(company => {
-          // Name Filter
           const matchesName = company.name.toLowerCase().includes(matrixSearch.toLowerCase());
           if (!matchesName) return false;
-
-          // Status Filter
           if (matrixStatusFilter !== 'all') {
               const visibleCategories = getMatrixCategories();
               const hasMatchingStatus = visibleCategories.some(cat => {
@@ -381,7 +337,6 @@ const Documents: React.FC<DocumentsProps> = ({
               });
               if (!hasMatchingStatus) return false;
           }
-
           return true;
       });
   };
@@ -486,74 +441,6 @@ const Documents: React.FC<DocumentsProps> = ({
                         }}
                     />
                 </div>
-                
-                {/* Company Filter */}
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">Filtrar Empresas</label>
-                  <div className="relative group">
-                    <button className="w-full text-left border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white flex justify-between items-center">
-                      <span className="truncate">
-                        {selectedCompanies.length === 0 ? 'Todas as Empresas' : `${selectedCompanies.length} selecionadas`}
-                      </span>
-                    </button>
-                    <div className="absolute top-full left-0 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 hidden group-hover:block hover:block p-2 max-h-96 overflow-y-auto">
-                        <label className="flex items-center gap-2 p-1 hover:bg-gray-50 rounded cursor-pointer border-b mb-1 pb-1">
-                          <input 
-                            type="checkbox" 
-                            className="rounded text-blue-600"
-                            checked={selectedCompanies.length === companies.length}
-                            onChange={toggleSelectAllCompanies}
-                          />
-                          <span className="text-sm font-bold text-gray-700">Selecionar Todas</span>
-                        </label>
-                        {companies.map(c => (
-                          <label key={c.id} className="flex items-center gap-2 p-1 hover:bg-gray-50 rounded cursor-pointer">
-                            <input 
-                              type="checkbox" 
-                              className="rounded text-blue-600"
-                              checked={selectedCompanies.includes(String(c.id))}
-                              onChange={() => toggleCompanySelection(String(c.id))}
-                            />
-                            <span className="text-sm text-gray-600 truncate">{c.name}</span>
-                          </label>
-                        ))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Category Filter */}
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">Filtrar Categorias</label>
-                  <div className="relative group">
-                    <button className="w-full text-left border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white flex justify-between items-center">
-                      <span className="truncate">
-                        {selectedCategories.length === 0 ? 'Todas as Categorias' : `${selectedCategories.length} selecionadas`}
-                      </span>
-                    </button>
-                    <div className="absolute top-full left-0 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-20 hidden group-hover:block hover:block p-2 max-h-96 overflow-y-auto">
-                        <label className="flex items-center gap-2 p-1 hover:bg-gray-50 rounded cursor-pointer border-b mb-1 pb-1">
-                          <input 
-                            type="checkbox" 
-                            className="rounded text-blue-600"
-                            checked={selectedCategories.length === DOCUMENT_CATEGORIES.length}
-                            onChange={toggleSelectAllCategories}
-                          />
-                          <span className="text-sm font-bold text-gray-700">Todas</span>
-                        </label>
-                        {DOCUMENT_CATEGORIES.map(cat => (
-                          <label key={cat} className="flex items-center gap-2 p-1 hover:bg-gray-50 rounded cursor-pointer">
-                            <input 
-                              type="checkbox" 
-                              className="rounded text-blue-600"
-                              checked={selectedCategories.includes(cat)}
-                              onChange={() => toggleCategorySelection(cat)}
-                            />
-                            <span className="text-sm text-gray-600 truncate">{cat}</span>
-                          </label>
-                        ))}
-                    </div>
-                  </div>
-                </div>
             </div>
             
             <div className="mt-6 flex flex-col items-center">
@@ -563,24 +450,121 @@ const Documents: React.FC<DocumentsProps> = ({
                     className="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 shadow-lg shadow-blue-500/20 font-bold flex items-center gap-2 disabled:opacity-70 transition-all"
                  >
                     {processing ? (
-                        <><Loader2 className="animate-spin rounded-full h-4 w-4" /> Lendo Conteúdo e Processando...</>
+                        <><Loader2 className="animate-spin rounded-full h-4 w-4" /> Lendo e Analisando...</>
                     ) : (
                         <><Play className="w-5 h-5" /> Iniciar Processamento Automático</>
                     )}
                  </button>
-                 {processingResults && (
-                   <div className="mt-4 text-sm text-gray-600 bg-gray-50 p-2 rounded border border-gray-200 text-center">
-                      <p><strong>Resultado do Processamento:</strong> {processingResults.total} arquivos analisados.</p>
-                      <div className="flex gap-4 justify-center mt-1">
-                          <span className="text-green-600 font-bold">{processingResults.processed} aceitos e enviados</span>
-                          <span className="text-red-500 font-bold">{processingResults.filtered} filtrados/erros</span>
-                      </div>
-                      <p className="text-xs text-gray-400 mt-1">Os arquivos aceitos já estão disponíveis na aba "Envio".</p>
-                   </div>
-                 )}
             </div>
         </div>
       </div>
+
+      {/* Preview Modal */}
+      {showPreviewModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] flex flex-col animate-in zoom-in-95 duration-200">
+                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-xl">
+                    <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                        <FilePlus className="w-5 h-5 text-blue-600" />
+                        Pré-visualização do Processamento
+                    </h3>
+                    <button onClick={() => { setShowPreviewModal(false); setPreviewFiles([]); }} className="text-gray-400 hover:text-gray-600">
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+                
+                <div className="p-4 bg-yellow-50 border-b border-yellow-100 text-sm text-yellow-800 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                    <div>
+                        Verifique se a Empresa e a Categoria foram identificadas corretamente. 
+                        Arquivos sem Empresa ou Categoria <strong>não serão processados</strong>.
+                    </div>
+                </div>
+
+                <div className="flex-1 overflow-auto p-0">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-gray-50 text-gray-600 sticky top-0 z-10 shadow-sm">
+                            <tr>
+                                <th className="px-4 py-3">Arquivo</th>
+                                <th className="px-4 py-3 w-1/3">Empresa Vinculada</th>
+                                <th className="px-4 py-3 w-1/4">Categoria</th>
+                                <th className="px-4 py-3 w-10 text-center">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                            {previewFiles.map((item) => (
+                                <tr key={item.id} className="hover:bg-gray-50 group">
+                                    <td className="px-4 py-3 font-medium text-gray-700 truncate max-w-[200px]" title={item.fileName}>
+                                        {item.fileName}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <select 
+                                            className={`w-full border rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-blue-500
+                                                ${!item.detectedCompanyId ? 'border-red-300 bg-red-50' : 'border-gray-300'}`}
+                                            value={item.detectedCompanyId || ''}
+                                            onChange={(e) => updatePreview(item.id, 'detectedCompanyId', Number(e.target.value) || null)}
+                                        >
+                                            <option value="">-- Selecione a Empresa --</option>
+                                            {companies.map(c => (
+                                                <option key={c.id} value={c.id}>{c.name} ({c.docNumber})</option>
+                                            ))}
+                                        </select>
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <select 
+                                            className={`w-full border rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-blue-500
+                                                ${!item.detectedCategory ? 'border-red-300 bg-red-50' : 'border-gray-300'}`}
+                                            value={item.detectedCategory}
+                                            onChange={(e) => updatePreview(item.id, 'detectedCategory', e.target.value)}
+                                        >
+                                            <option value="">-- Selecione --</option>
+                                            {DOCUMENT_CATEGORIES.map(cat => (
+                                                <option key={cat} value={cat}>{cat}</option>
+                                            ))}
+                                        </select>
+                                    </td>
+                                    <td className="px-4 py-3 text-center">
+                                        <button 
+                                            onClick={() => removePreview(item.id)}
+                                            className="text-red-400 hover:text-red-600 p-1 rounded hover:bg-red-50"
+                                            title="Remover arquivo"
+                                        >
+                                            <Trash className="w-4 h-4" />
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                            {previewFiles.length === 0 && (
+                                <tr><td colSpan={4} className="text-center py-8 text-gray-500">Nenhum arquivo válido encontrado.</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div className="p-4 border-t border-gray-100 bg-gray-50 rounded-b-xl flex justify-between items-center">
+                    <div className="text-sm text-gray-600">
+                        Total: <strong>{previewFiles.length}</strong> arquivos.
+                    </div>
+                    <div className="flex gap-3">
+                        <button 
+                            onClick={() => { setShowPreviewModal(false); setPreviewFiles([]); }} 
+                            className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 font-medium"
+                        >
+                            Cancelar
+                        </button>
+                        <button 
+                            onClick={confirmProcessing}
+                            disabled={isUploadingConfirmed || previewFiles.length === 0}
+                            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold flex items-center gap-2 disabled:opacity-70"
+                        >
+                            {isUploadingConfirmed ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                            Confirmar e Processar
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+      )}
 
       {/* Document Matrix Section */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
