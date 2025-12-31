@@ -49,11 +49,11 @@ db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS sent_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, companyName TEXT, docName TEXT, category TEXT, sentAt TEXT, channels TEXT, status TEXT)`);
 });
 
-// Configuração Nodemailer (Exatamente como seu Python: SSL na porta 465)
+// Configuração Nodemailer
 const emailTransporter = nodemailer.createTransport({
     host: 'smtp.gmail.com',
     port: 465,
-    secure: true, // true para porta 465
+    secure: true,
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
@@ -84,6 +84,64 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'dist')));
 
+// --- Helper HTML Builder ---
+const buildEmailHtml = (messageBody, documents, emailSignature) => {
+    let docsTable = '';
+    
+    if (documents && documents.length > 0) {
+        // Sort by dueDate roughly
+        const sortedDocs = [...documents].sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
+        
+        let rows = '';
+        sortedDocs.forEach(doc => {
+            rows += `
+                <tr style="border-bottom: 1px solid #eee;">
+                    <td style="padding: 10px; color: #333;">${doc.docName}</td>
+                    <td style="padding: 10px; color: #555;">${doc.category}</td>
+                    <td style="padding: 10px; color: #555;">${doc.dueDate || 'N/A'}</td>
+                    <td style="padding: 10px; color: #555;">${doc.competence}</td>
+                </tr>
+            `;
+        });
+
+        docsTable = `
+            <h3 style="color: #2c3e50; border-bottom: 2px solid #eff6ff; padding-bottom: 10px; margin-top: 30px; font-size: 16px;">Documentos em Anexo:</h3>
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px;">
+                <thead>
+                    <tr style="background-color: #f8fafc; color: #64748b;">
+                        <th style="padding: 10px; text-align: left; border-bottom: 2px solid #e2e8f0;">Documento</th>
+                        <th style="padding: 10px; text-align: left; border-bottom: 2px solid #e2e8f0;">Categoria</th>
+                        <th style="padding: 10px; text-align: left; border-bottom: 2px solid #e2e8f0;">Vencimento</th>
+                        <th style="padding: 10px; text-align: left; border-bottom: 2px solid #e2e8f0;">Competência</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows}
+                </tbody>
+            </table>
+        `;
+    }
+
+    return `
+    <html>
+        <body style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; margin: 0; padding: 20px;">
+            <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
+                
+                <div style="background-color: #f8f9fa; padding: 20px; border-radius: 6px; border-left: 4px solid #2563eb; margin-bottom: 25px;">
+                    ${messageBody.replace(/\n/g, '<br>')}
+                </div>
+                
+                ${docsTable}
+                
+                <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 14px; color: #64748b;">
+                    ${emailSignature || ''}
+                </div>
+            </div>
+        </body>
+    </html>
+    `;
+};
+
 // --- API ---
 
 app.post('/api/upload', upload.single('file'), (req, res) => {
@@ -92,65 +150,101 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 });
 
 app.post('/api/send-documents', async (req, res) => {
-    const { documents, subject, messageBody, channels } = req.body;
+    const { documents, subject, messageBody, channels, emailSignature } = req.body;
     let successCount = 0;
     let errors = [];
-    let sentIds = []; // Array para armazenar IDs dos documentos enviados com sucesso
+    let sentIds = [];
 
-    console.log(`Iniciando envio de ${documents.length} documentos...`);
+    console.log(`Iniciando envio. ${documents.length} documentos recebidos.`);
 
-    for (const doc of documents) {
+    // 1. Agrupar documentos por CompanyID para enviar 1 email por empresa
+    const docsByCompany = documents.reduce((acc, doc) => {
+        if (!acc[doc.companyId]) acc[doc.companyId] = [];
+        acc[doc.companyId].push(doc);
+        return acc;
+    }, {});
+
+    const companyIds = Object.keys(docsByCompany);
+    console.log(`Empresas distintas para envio: ${companyIds.length}`);
+
+    for (const companyId of companyIds) {
+        const companyDocs = docsByCompany[companyId];
+        
         try {
-            // Verifica arquivo físico
-            const filePath = path.join(UPLOADS_DIR, doc.serverFilename);
-            if (!fs.existsSync(filePath)) {
-                const msg = `Arquivo não encontrado no servidor: ${doc.serverFilename}`;
-                console.error(msg);
-                errors.push(msg);
-                continue;
-            }
-
+            // Buscar dados da empresa
             const company = await new Promise((resolve, reject) => {
-                db.get("SELECT * FROM companies WHERE id = ?", [doc.companyId], (err, row) => {
+                db.get("SELECT * FROM companies WHERE id = ?", [companyId], (err, row) => {
                     if (err) reject(err); else resolve(row);
                 });
             });
 
             if (!company) {
-                errors.push(`Empresa ID ${doc.companyId} não encontrada.`);
+                errors.push(`Empresa ID ${companyId} não encontrada.`);
                 continue;
             }
 
-            // 1. E-mail (Lógica Python portada)
+            // Preparar Anexos físicos
+            const validAttachments = [];
+            for (const doc of companyDocs) {
+                const filePath = path.join(UPLOADS_DIR, doc.serverFilename);
+                if (fs.existsSync(filePath)) {
+                    validAttachments.push({
+                        filename: doc.docName,
+                        path: filePath,
+                        contentType: 'application/pdf' // Assume PDF based on prompt logic, or auto-detect
+                    });
+                } else {
+                    console.error(`Arquivo físico não encontrado: ${filePath}`);
+                    errors.push(`Arquivo sumiu: ${doc.docName} (${company.name})`);
+                }
+            }
+
+            if (validAttachments.length === 0 && companyDocs.length > 0) {
+                 errors.push(`Sem anexos válidos para ${company.name}, pulando envio.`);
+                 continue;
+            }
+
+            // --- Envio E-MAIL ---
             if (channels.email && company.email) {
                 try {
+                    const finalHtml = buildEmailHtml(messageBody, companyDocs, emailSignature);
+                    const finalSubject = `${subject} - Competência: ${companyDocs[0].competence}`; // Usa competência do primeiro doc
+
                     await emailTransporter.sendMail({
                         from: process.env.EMAIL_USER,
                         to: company.email,
-                        subject: subject,
-                        text: messageBody,
-                        html: messageBody.replace(/\n/g, '<br>'),
-                        attachments: [{ filename: doc.docName, path: filePath }]
+                        subject: finalSubject,
+                        html: finalHtml,
+                        attachments: validAttachments
                     });
-                    console.log(`E-mail enviado para ${company.email}`);
+                    console.log(`E-mail (agrupado) enviado para ${company.email}`);
                 } catch (e) {
                     const msg = `Erro Email ${company.name}: ${e.message}`;
                     console.error(msg);
                     errors.push(msg);
-                    // Se falhar o email mas tiver whatsapp, tentamos o whatsapp. 
-                    // Se falhar ambos ou só tinha email, considera erro no envio do doc?
-                    // Por enquanto, se o canal foi solicitado e falhou, loga erro.
                 }
             }
 
-            // 2. WhatsApp
+            // --- Envio WHATSAPP ---
+            // WhatsApp Web.js não suporta envio de múltiplos arquivos em 1 mensagem facilmente como anexo agrupado.
+            // Enviaremos 1 mensagem de texto + N arquivos.
             if (channels.whatsapp && company.whatsapp && clientReady) {
                 try {
                     let number = company.whatsapp.replace(/\D/g, '');
                     if (!number.startsWith('55')) number = '55' + number;
-                    const media = MessageMedia.fromFilePath(filePath);
-                    media.filename = doc.docName;
-                    await client.sendMessage(`${number}@c.us`, media, { caption: subject });
+                    const chatId = `${number}@c.us`;
+
+                    // 1. Mensagem de texto
+                    await client.sendMessage(chatId, `${subject}\n\n${messageBody}`);
+
+                    // 2. Arquivos
+                    for (const att of validAttachments) {
+                        const media = MessageMedia.fromFilePath(att.path);
+                        media.filename = att.filename;
+                        await client.sendMessage(chatId, media);
+                        // Pequeno delay para evitar flood/block
+                        await new Promise(r => setTimeout(r, 1000));
+                    }
                     console.log(`WhatsApp enviado para ${number}`);
                 } catch (e) {
                     const msg = `Erro Zap ${company.name}: ${e.message}`;
@@ -159,34 +253,29 @@ app.post('/api/send-documents', async (req, res) => {
                 }
             }
 
-            // Registrar Log
-            db.run(`INSERT INTO sent_logs (companyName, docName, category, sentAt, channels, status) VALUES (?, ?, ?, datetime('now', 'localtime'), ?, 'success')`, 
-                [company.name, doc.docName, doc.category, JSON.stringify(channels)]);
-            
-            // Atualizar status
-            db.run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, 'sent') ON CONFLICT(companyId, category, competence) DO UPDATE SET status='sent'`, 
-                [doc.companyId, doc.category, doc.competence]);
+            // --- PÓS ENVIO (Logs e Status) ---
+            for (const doc of companyDocs) {
+                // Registrar Log Individual
+                db.run(`INSERT INTO sent_logs (companyName, docName, category, sentAt, channels, status) VALUES (?, ?, ?, datetime('now', 'localtime'), ?, 'success')`, 
+                    [company.name, doc.docName, doc.category, JSON.stringify(channels)]);
+                
+                // Atualizar status
+                db.run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, 'sent') ON CONFLICT(companyId, category, competence) DO UPDATE SET status='sent'`, 
+                    [doc.companyId, doc.category, doc.competence]);
 
-            // Assume sucesso se pelo menos tentou processar e não explodiu antes
-            // (Melhoria: considerar sucesso apenas se enviou por pelo menos 1 canal solicitado)
-            successCount++;
-            
-            // Se o documento veio do frontend, ele pode ter um ID temporário ou real.
-            // Retornamos o ID que o frontend nos enviou para ele dar baixa na lista.
-            if (doc.id) {
-                sentIds.push(doc.id);
+                if (doc.id) sentIds.push(doc.id);
+                successCount++;
             }
 
         } catch (e) {
-            console.error(`Erro fatal processando doc:`, e);
-            errors.push(e.message);
+            console.error(`Erro processando empresa ${companyId}:`, e);
+            errors.push(`Falha geral empresa ${companyId}: ${e.message}`);
         }
     }
 
     res.json({ success: true, sent: successCount, sentIds, errors });
 });
 
-// Endpoint corrigido para retornar apenas os ultimos 5
 app.get('/api/recent-sends', (req, res) => {
     db.all("SELECT * FROM sent_logs ORDER BY id DESC LIMIT 5", (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -194,7 +283,6 @@ app.get('/api/recent-sends', (req, res) => {
     });
 });
 
-// Tasks
 app.get('/api/tasks', (req, res) => {
     db.all('SELECT * FROM tasks', (err, rows) => res.json(rows || []));
 });
@@ -212,7 +300,6 @@ app.post('/api/tasks', (req, res) => {
 });
 app.delete('/api/tasks/:id', (req, res) => { db.run('DELETE FROM tasks WHERE id = ?', [req.params.id], (err) => res.json({ success: !err })); });
 
-// Companies
 app.get('/api/companies', (req, res) => { db.all('SELECT * FROM companies ORDER BY name ASC', (err, rows) => res.json(rows || [])); });
 app.post('/api/companies', (req, res) => {
     const { id, name, docNumber, type, email, whatsapp } = req.body;
@@ -221,7 +308,6 @@ app.post('/api/companies', (req, res) => {
 });
 app.delete('/api/companies/:id', (req, res) => { db.run('DELETE FROM companies WHERE id = ?', [req.params.id], (err) => res.json({ success: !err })); });
 
-// Docs Status
 app.get('/api/documents/status', (req, res) => {
     const sql = req.query.competence ? 'SELECT * FROM document_status WHERE competence = ?' : 'SELECT * FROM document_status';
     db.all(sql, req.query.competence ? [req.query.competence] : [], (err, rows) => res.json(rows || []));
@@ -231,7 +317,6 @@ app.post('/api/documents/status', (req, res) => {
     db.run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, ?) ON CONFLICT(companyId, category, competence) DO UPDATE SET status = excluded.status`, [companyId, category, competence, status], (err) => res.json({ success: !err }));
 });
 
-// WA Status
 app.get('/api/whatsapp/status', (req, res) => { res.json({ status: clientReady ? 'connected' : 'disconnected', qr: qrCodeData, info: client.info }); });
 app.post('/api/whatsapp/disconnect', async (req, res) => { try { await client.logout(); await client.initialize(); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 

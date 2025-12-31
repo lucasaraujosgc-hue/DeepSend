@@ -124,6 +124,7 @@ const App: React.FC = () => {
                   documents={documents}
                   onSendDocuments={handleSendDocuments}
                   onNavigateToDocuments={handleNavigateToDocuments}
+                  userSettings={userSettings}
                />;
       case 'bulksend':
         return <BulkSend />;

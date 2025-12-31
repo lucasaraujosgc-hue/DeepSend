@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Send as SendIcon, Mail, MessageCircle, FileText, Trash, Clock, Check, Info, ArrowLeft, X, CheckSquare, Calendar, Loader2 } from 'lucide-react';
-import { Document, Company } from '../types';
+import { Document, Company, UserSettings } from '../types';
 import { api } from '../services/api';
 
 interface SendProps {
   documents: Document[];
   onSendDocuments: (ids: number[]) => void;
   onNavigateToDocuments: () => void;
+  userSettings: UserSettings;
 }
 
-const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDocuments }) => {
+const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDocuments, userSettings }) => {
   const getCurrentCompetence = () => {
     const now = new Date();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -92,7 +93,8 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
             serverFilename: d.serverFilename || d.name, // Deve existir se foi feito upload correto
             docName: d.name,
             category: d.category,
-            competence: d.competence
+            competence: d.competence,
+            dueDate: d.dueDate // Importante para a tabela do e-mail
         }));
 
     try {
@@ -100,7 +102,8 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
             documents: docsToSend,
             subject,
             messageBody: message,
-            channels: { email: sendEmail, whatsapp: sendWhatsapp }
+            channels: { email: sendEmail, whatsapp: sendWhatsapp },
+            emailSignature: userSettings.emailSignature
         });
 
         if (result.success) {
