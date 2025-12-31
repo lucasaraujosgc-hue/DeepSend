@@ -1,8 +1,28 @@
+
 import { Company, Task, Document } from '../types';
 
 const API_URL = '/api';
 
 export const api = {
+  // Authentication
+  login: async (user: string, pass: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_URL}/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, password: pass }),
+      });
+      
+      if (!res.ok) return false;
+      
+      const data = await res.json();
+      return data.success === true;
+    } catch (error) {
+      console.error("Login failed", error);
+      return false;
+    }
+  },
+
   // Companies
   getCompanies: async (): Promise<Company[]> => {
     const res = await fetch(`${API_URL}/companies`);

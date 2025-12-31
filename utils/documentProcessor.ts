@@ -127,15 +127,17 @@ export const identifyCompany = (text: string, companies: Company[]): Company | n
   for (const item of foundDocs) {
       for (const company of companies) {
           const companyDocClean = company.docNumber.replace(/\D/g, '');
+          const itemValClean = item.val.replace(/\D/g, ''); // Ensure search item is clean
           
           if (item.type === 'CNPJ') {
               // Compare first 8 digits (Root)
-              if (companyDocClean.length >= 8 && companyDocClean.startsWith(item.val)) {
+              // Ensure we are comparing apples to apples (clean digits)
+              if (companyDocClean.length >= 8 && companyDocClean.startsWith(itemValClean)) {
                   return company;
               }
           } else {
               // CPF Exact match
-              if (companyDocClean === item.val) {
+              if (companyDocClean === itemValClean) {
                   return company;
               }
           }

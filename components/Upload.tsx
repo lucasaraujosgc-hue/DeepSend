@@ -5,7 +5,8 @@ import { DOCUMENT_CATEGORIES } from '../constants';
 import { calcularTodosVencimentos } from '../utils/dateHelpers';
 import { UploadedFile, Company, UserSettings } from '../types';
 import { api } from '../services/api';
-import { DEFAULT_USER_SETTINGS } from '../constants'; // Fallback
+import { identifyCategory } from '../utils/documentProcessor'; // Import identifyCategory
+import { DEFAULT_USER_SETTINGS } from '../constants';
 
 interface UploadProps {
   preFillData?: {
@@ -13,7 +14,6 @@ interface UploadProps {
     competence: string;
   } | null;
   onUploadSuccess: (files: UploadedFile[], companyId: number, competence: string) => void;
-  // Make userSettings optional to maintain backward compatibility if parent doesn't update immediately, though in App.tsx we updated it.
   userSettings?: UserSettings; 
 }
 
@@ -49,7 +49,6 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
 
   useEffect(() => {
     if (competence.match(/^\d{2}\/\d{4}$/)) {
-        // Use userSettings.categoryRules
         const dates = calcularTodosVencimentos(competence, userSettings.categoryRules);
         setCalculatedDates(dates);
         setFiles(prev => prev.map(f => {
@@ -84,21 +83,17 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
 
   const processFiles = (fileList: File[]) => {
     const newFiles: UploadedFile[] = fileList.map(file => {
-      const nameLower = file.name.toLowerCase();
       let category = '';
       let dueDate = '';
 
-      // Simple heuristic for default category on upload (can be overridden by backend or user)
-      if (nameLower.includes('contracheque')) category = 'Contracheque';
-      else if (nameLower.includes('fgts')) category = 'FGTS';
-      else if (nameLower.includes('inss')) category = 'INSS';
-      else if (nameLower.includes('simples')) category = 'Simples Nacional';
-      else if (nameLower.includes('folha')) category = 'Folha de Pagamento';
-      else if (nameLower.includes('honor')) category = 'Honorários';
-      else if (nameLower.includes('fiscais') || nameLower.includes('nota')) category = 'Notas Fiscais';
-      
-      // Fallback if empty, user must select
-      if (!category) category = DOCUMENT_CATEGORIES[0];
+      // Tentar identificar categoria usando as palavras-chave configuradas (Vinculações)
+      const identified = identifyCategory(file.name, userSettings.categoryKeywords);
+      if (identified) {
+          category = identified;
+      } else {
+          // Fallback para a primeira categoria se não encontrar
+          category = DOCUMENT_CATEGORIES[0];
+      }
 
       if (category && calculatedDates[category]) {
           dueDate = calculatedDates[category];
@@ -138,7 +133,6 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
     
     setIsUploading(true);
     try {
-        // Upload each file to server and get the saved filename
         const uploadedFilesWithServerNames = await Promise.all(files.map(async (f) => {
             const res = await api.uploadFile(f.file);
             return {

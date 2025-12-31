@@ -11,10 +11,12 @@ import BulkSend from './components/BulkSend';
 import ScheduledMessages from './components/ScheduledMessages';
 import Settings from './components/Settings';
 import Send from './components/Send'; 
+import Login from './components/Login';
 import { DEFAULT_USER_SETTINGS, MOCK_DOCUMENTS } from './constants';
 import { UserSettings, Document, UploadedFile } from './types';
 
 const App: React.FC = () => {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [activePage, setActivePage] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
@@ -26,6 +28,10 @@ const App: React.FC = () => {
 
   // State for pre-filling Upload form
   const [uploadPreFill, setUploadPreFill] = useState<{companyId: number, competence: string} | null>(null);
+
+  if (!isAuthenticated) {
+    return <Login onLoginSuccess={() => setIsAuthenticated(true)} />;
+  }
 
   const handleNavigateToUpload = (companyId: number, competence: string) => {
     setUploadPreFill({ companyId, competence });

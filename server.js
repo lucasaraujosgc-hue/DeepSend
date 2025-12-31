@@ -144,6 +144,19 @@ const buildEmailHtml = (messageBody, documents, emailSignature) => {
 
 // --- API ---
 
+app.post('/api/login', (req, res) => {
+    const { user, password } = req.body;
+    // Se não estiver configurado no .env, aceita admin/admin
+    const envUser = process.env.USER || 'admin';
+    const envPass = process.env.PASSWORD || 'admin';
+
+    if (user === envUser && password === envPass) {
+        res.json({ success: true, token: 'mock-session-token' });
+    } else {
+        res.status(401).json({ error: 'Credenciais inválidas' });
+    }
+});
+
 app.post('/api/upload', upload.single('file'), (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo' });
     res.json({ filename: req.file.filename, originalName: req.file.originalname });
