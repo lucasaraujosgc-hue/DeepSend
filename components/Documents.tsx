@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive, Loader2, FilePlus, AlertTriangle, Trash } from 'lucide-react';
 import { DOCUMENT_CATEGORIES } from '../constants';
@@ -52,6 +53,10 @@ const Documents: React.FC<DocumentsProps> = ({
   const [processing, setProcessing] = useState(false);
   const [isUploadingConfirmed, setIsUploadingConfirmed] = useState(false);
   
+  // Processing Filters (Restored)
+  const [processingCompanyId, setProcessingCompanyId] = useState<string>('');
+  const [processingCategoryFilter, setProcessingCategoryFilter] = useState<string>('');
+
   // Modal Preview State
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [previewFiles, setPreviewFiles] = useState<PreviewFile[]>([]);
@@ -125,24 +130,42 @@ const Documents: React.FC<DocumentsProps> = ({
       const tempFiles: PreviewFile[] = [];
 
       for (const file of fileList) {
-          // Read content for ID
+          // Read content for identification
           let textContent = file.name;
+          
+          // Only attempt PDF read if we are in "Automatic" mode or just need context
           if (file.type === 'application/pdf') {
               try {
                 const extracted = await extractTextFromPDF(file);
-                if (extracted.length > 10) textContent += " " + extracted;
+                if (extracted && extracted.length > 10) {
+                    textContent += " " + extracted;
+                }
               } catch(e) { console.warn("PDF Read error", e); }
           }
 
-          const category = identifyCategory(textContent, userSettings.categoryKeywords);
-          const company = identifyCompany(textContent, companies);
+          // Logic: If filter is selected, force it. Else, detect.
+          let detectedCompanyId: number | null = null;
+          if (processingCompanyId) {
+              detectedCompanyId = Number(processingCompanyId);
+          } else {
+              const company = identifyCompany(textContent, companies);
+              detectedCompanyId = company ? company.id : null;
+          }
+
+          let detectedCategory = '';
+          if (processingCategoryFilter) {
+              detectedCategory = processingCategoryFilter;
+          } else {
+              // Pass userSettings keywords to identifier
+              detectedCategory = identifyCategory(textContent, userSettings.categoryKeywords) || '';
+          }
 
           tempFiles.push({
               id: Math.random().toString(36).substr(2, 9),
               file: file,
               fileName: file.name,
-              detectedCompanyId: company ? company.id : null,
-              detectedCategory: category || '', // Empty if not found
+              detectedCompanyId: detectedCompanyId,
+              detectedCategory: detectedCategory, 
               status: 'ready',
               size: file.size
           });
@@ -178,19 +201,34 @@ const Documents: React.FC<DocumentsProps> = ({
             if (simpleName.toLowerCase().endsWith('.pdf')) {
                  try {
                      const extracted = await extractTextFromPDF(file);
-                     if (extracted.length > 10) textContent += " " + extracted;
+                     if (extracted && extracted.length > 10) {
+                         textContent += " " + extracted;
+                     }
                  } catch(e) {}
             }
 
-            const category = identifyCategory(textContent, userSettings.categoryKeywords);
-            const company = identifyCompany(textContent, companies);
+            // Logic: Filter vs Detection
+            let detectedCompanyId: number | null = null;
+            if (processingCompanyId) {
+                detectedCompanyId = Number(processingCompanyId);
+            } else {
+                const company = identifyCompany(textContent, companies);
+                detectedCompanyId = company ? company.id : null;
+            }
+
+            let detectedCategory = '';
+            if (processingCategoryFilter) {
+                detectedCategory = processingCategoryFilter;
+            } else {
+                detectedCategory = identifyCategory(textContent, userSettings.categoryKeywords) || '';
+            }
 
             tempFiles.push({
                 id: Math.random().toString(36).substr(2, 9),
                 file: file,
                 fileName: simpleName,
-                detectedCompanyId: company ? company.id : null,
-                detectedCategory: category || '',
+                detectedCompanyId: detectedCompanyId,
+                detectedCategory: detectedCategory,
                 status: 'ready',
                 size: file.size
             });
@@ -223,9 +261,6 @@ const Documents: React.FC<DocumentsProps> = ({
       
       let processedCount = 0;
 
-      // Group uploads by company to batch the onUploadSuccess calls if we wanted, 
-      // but keeping simple loop is fine for now.
-      
       for (const item of previewFiles) {
           if (!item.detectedCompanyId || !item.detectedCategory) continue;
 
@@ -257,33 +292,6 @@ const Documents: React.FC<DocumentsProps> = ({
 
 
   // --- Matrix Logic & Filters ---
-
-  const toggleCompanySelection = (id: string) => {
-    setSelectedCompanies(prev => 
-      prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]
-    );
-  };
-  const toggleSelectAllCompanies = () => {
-    if (selectedCompanies.length === companies.length) {
-      setSelectedCompanies([]);
-    } else {
-      setSelectedCompanies(companies.map(c => String(c.id)));
-    }
-  };
-
-  const toggleCategorySelection = (cat: string) => {
-    setSelectedCategories(prev => 
-      prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]
-    );
-  };
-  const toggleSelectAllCategories = () => {
-    if (selectedCategories.length === DOCUMENT_CATEGORIES.length) {
-      setSelectedCategories([]);
-    } else {
-      setSelectedCategories(DOCUMENT_CATEGORIES);
-    }
-  };
-
   const getStatus = (companyId: number, category: string) => {
       const dbStatus = dbStatuses.find(s => 
           s.companyId === companyId && 
@@ -401,7 +409,7 @@ const Documents: React.FC<DocumentsProps> = ({
             <h3 className="font-bold">Processamento Automático</h3>
         </div>
         <div className="p-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
                 
                 {/* Path Input */}
                 <div className="lg:col-span-1">
@@ -441,9 +449,39 @@ const Documents: React.FC<DocumentsProps> = ({
                         }}
                     />
                 </div>
+
+                {/* Filter Company */}
+                <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">Filtrar por Empresa</label>
+                    <select 
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                        value={processingCompanyId}
+                        onChange={(e) => setProcessingCompanyId(e.target.value)}
+                    >
+                        <option value="">Automático (Identificar no PDF)</option>
+                        {companies.map(c => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                    </select>
+                </div>
+
+                {/* Filter Category */}
+                <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">Filtrar por Categoria</label>
+                    <select 
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                        value={processingCategoryFilter}
+                        onChange={(e) => setProcessingCategoryFilter(e.target.value)}
+                    >
+                        <option value="">Automático (Identificar no PDF)</option>
+                        {DOCUMENT_CATEGORIES.map(cat => (
+                            <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                    </select>
+                </div>
             </div>
             
-            <div className="mt-6 flex flex-col items-center">
+            <div className="flex flex-col items-center">
                  <button 
                     onClick={handleProcessClick}
                     disabled={processing}

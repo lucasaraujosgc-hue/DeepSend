@@ -3,13 +3,15 @@ import { Company } from '../types';
 import * as pdfjsLib from 'pdfjs-dist';
 
 // Define worker globally since we are using ESM modules in browser
+// Using a specific version to match the library version
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://esm.sh/pdfjs-dist@3.11.174/build/pdf.worker.min.mjs';
 
 /**
- * Normalizes text to remove accents for better matching
+ * Normalizes text to remove accents and special chars for better matching
  */
 export const removeAccents = (text: string): string => {
-  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (!text) return "";
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 };
 
 /**
@@ -18,11 +20,14 @@ export const removeAccents = (text: string): string => {
 export const extractTextFromPDF = async (file: File): Promise<string> => {
   try {
     const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
     let fullText = "";
 
-    // Read all pages (or limit to first few if performance is an issue)
-    for (let i = 1; i <= pdf.numPages; i++) {
+    // Read up to 5 pages to save performance but get enough context
+    const maxPages = Math.min(pdf.numPages, 5);
+    
+    for (let i = 1; i <= maxPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
       const pageText = textContent.items.map((item: any) => item.str).join(" ");
@@ -41,32 +46,31 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
  * Implements strict priority rules defined in the Python script.
  */
 export const identifyCategory = (text: string, keywordMap: Record<string, string[]>): string | null => {
-  const textLower = text.toLowerCase();
+  const textNormalized = removeAccents(text);
 
-  // Priority 1: cora.com.br -> Honorários (Exclusive)
-  if (textLower.includes('cora.com.br')) {
-    return 'Honorários';
-  }
+  // Priority 1: Exclusive rules
+  if (textNormalized.includes('cora.com.br')) return 'Honorários';
+  if (textNormalized.includes('nota fiscal')) return 'Notas Fiscais';
 
-  // Check for Nota Fiscal explicitly
-  if (textLower.includes('nota fiscal')) {
-    return 'Notas Fiscais';
-  }
-
-  // Priority 2: 'folha mensal' AND 'extrato mensal' -> Folha de Pagamento
-  if (textLower.includes('folha mensal') && textLower.includes('extrato mensal')) {
+  // Priority 2: Combinations
+  // 'folha mensal' AND 'extrato mensal' -> Folha de Pagamento
+  if (textNormalized.includes('folha mensal') && textNormalized.includes('extrato mensal')) {
     return 'Folha de Pagamento';
   }
 
-  // Priority 3: 'folha mensal' -> Contracheque
-  if (textLower.includes('folha mensal')) {
+  // Priority 3: Specific single keywords
+  if (textNormalized.includes('folha mensal')) {
     return 'Contracheque';
   }
 
   // Standard Keyword Mapping Loop (from settings/constants)
+  // This uses the User Settings configuration
   for (const [category, keywords] of Object.entries(keywordMap)) {
+    if (!keywords || !Array.isArray(keywords)) continue;
+    
     for (const keyword of keywords) {
-      if (textLower.includes(keyword.toLowerCase())) {
+      const kwNormalized = removeAccents(keyword);
+      if (textNormalized.includes(kwNormalized)) {
         return category;
       }
     }
@@ -79,15 +83,10 @@ export const identifyCategory = (text: string, keywordMap: Record<string, string
  * Identifies the company based on text content using Python logic logic.
  */
 export const identifyCompany = (text: string, companies: Company[]): Company | null => {
-  // Regex pattern from Python script
-  // Gr 1: CNPJ Completo (XX.XXX.XXX/XXXX-XX)
-  // Gr 2: CPF Completo (XXX.XXX.XXX-XX)
-  // Gr 3: CNPJ Simples (14 digitos)
-  // Gr 4: CPF Simples (11 digitos)
-  // Gr 5: CNPJ Parcial 1 (XX.XXX.XXX) - 8 digitos formatado
-  // Gr 6: CPF Parcial 1 (XXX.XXX.XXX) - 9 digitos formatado
-  // Gr 7: CNPJ Parcial 2 (8 digitos)
-  // Gr 8: CPF Parcial 2 (9 digitos)
+  const textNormalized = removeAccents(text);
+
+  // 1. Regex Search for CNPJ/CPF
+  // Pattern matches various formats of CNPJ and CPF
   const pattern = /(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})|(\d{3}\.\d{3}\.\d{3}-\d{2})|(\d{14})|(\d{11})|(\d{2}\.\d{3}\.\d{3})|(\d{3}\.\d{3}\.\d{3})|(\d{8})|(\d{9})/g;
   
   const matches = [...text.matchAll(pattern)];
@@ -95,49 +94,29 @@ export const identifyCompany = (text: string, companies: Company[]): Company | n
   const foundDocs: {type: 'CNPJ' | 'CPF', val: string}[] = [];
 
   for (const match of matches) {
-      // match[0] is the full match, match[1]..match[8] are groups
-      const [full, cnpjFull, cpfFull, cnpjSimple, cpfSimple, cnpjPart1, cpfPart1, cnpjPart2, cpfPart2] = match;
-
-      if (cnpjFull) {
-          const clean = cnpjFull.replace(/\D/g, '');
+      const [full] = match;
+      const clean = full.replace(/\D/g, '');
+      
+      if (clean.length === 14 || clean.length === 8) { // CNPJ or CNPJ Root
           foundDocs.push({ type: 'CNPJ', val: clean.substring(0, 8) });
-      } else if (cpfFull) {
-          const clean = cpfFull.replace(/\D/g, '');
+      } else if (clean.length === 11 || clean.length === 9) { // CPF
           foundDocs.push({ type: 'CPF', val: clean });
-      } else if (cnpjSimple) {
-          foundDocs.push({ type: 'CNPJ', val: cnpjSimple.substring(0, 8) });
-      } else if (cpfSimple) {
-          foundDocs.push({ type: 'CPF', val: cpfSimple });
-      } else if (cnpjPart1) {
-          const clean = cnpjPart1.replace(/\D/g, '');
-          foundDocs.push({ type: 'CNPJ', val: clean }); // Assumes 8 digits
-      } else if (cpfPart1) {
-           const clean = cpfPart1.replace(/\D/g, '');
-           foundDocs.push({ type: 'CPF', val: clean });
-      } else if (cnpjPart2) {
-           foundDocs.push({ type: 'CNPJ', val: cnpjPart2 });
-      } else if (cpfPart2) {
-           foundDocs.push({ type: 'CPF', val: cpfPart2 });
       }
   }
 
-  // Remove duplicates handled by logic below implicitly by iterating foundDocs
-
-  // 1. Search in DB by Doc
+  // Search in DB by Doc Number
   for (const item of foundDocs) {
       for (const company of companies) {
           const companyDocClean = company.docNumber.replace(/\D/g, '');
-          const itemValClean = item.val.replace(/\D/g, ''); // Ensure search item is clean
           
           if (item.type === 'CNPJ') {
               // Compare first 8 digits (Root)
-              // Ensure we are comparing apples to apples (clean digits)
-              if (companyDocClean.length >= 8 && companyDocClean.startsWith(itemValClean)) {
+              if (companyDocClean.length >= 8 && companyDocClean.startsWith(item.val)) {
                   return company;
               }
           } else {
               // CPF Exact match
-              if (companyDocClean === itemValClean) {
+              if (companyDocClean === item.val) {
                   return company;
               }
           }
@@ -145,12 +124,12 @@ export const identifyCompany = (text: string, companies: Company[]): Company | n
   }
 
   // 2. Fallback: Search by Name (removing accents)
-  const textLower = removeAccents(text.toLowerCase());
   for (const company of companies) {
-    const nameLower = removeAccents(company.name.toLowerCase());
+    const nameNormalized = removeAccents(company.name);
     
     // Check if company name is in text (simple includes)
-    if (textLower.includes(nameLower)) {
+    // We check if the name is long enough to avoid false positives with short names
+    if (nameNormalized.length > 3 && textNormalized.includes(nameNormalized)) {
         return company;
     }
   }
