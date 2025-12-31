@@ -57,6 +57,34 @@ export const api = {
     });
   },
 
+  // Upload Real
+  uploadFile: async (file: File): Promise<{ filename: string; originalName: string }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${API_URL}/upload`, {
+        method: 'POST',
+        body: formData
+    });
+    if (!res.ok) throw new Error("Upload failed");
+    return res.json();
+  },
+
+  // Send Documents Real
+  sendDocuments: async (payload: { documents: any[], subject: string, messageBody: string, channels: any }): Promise<any> => {
+    const res = await fetch(`${API_URL}/send-documents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    return res.json();
+  },
+
+  // Dashboard Data
+  getRecentSends: async (): Promise<any[]> => {
+    const res = await fetch(`${API_URL}/recent-sends`);
+    return res.json();
+  },
+
   // WhatsApp
   getWhatsAppStatus: async (): Promise<{ status: string; qr: string | null; info?: any }> => {
     const res = await fetch(`${API_URL}/whatsapp/status`);

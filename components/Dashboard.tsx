@@ -1,16 +1,15 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Building2, 
   CheckCircle2, 
   Clock, 
   AlertCircle,
   FileText,
-  TrendingUp,
-  MoreVertical
+  Loader2
 } from 'lucide-react';
-import { MOCK_TASKS, MOCK_COMPANIES, MOCK_DOCUMENTS } from '../constants';
-import { TaskStatus } from '../types';
+import { Task, TaskStatus } from '../types';
 import Kanban from './Kanban';
+import { api } from '../services/api';
 
 const StatCard: React.FC<{ title: string; value: string | number; icon: any; color: string }> = ({ title, value, icon: Icon, color }) => (
   <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
@@ -27,8 +26,39 @@ const StatCard: React.FC<{ title: string; value: string | number; icon: any; col
 );
 
 const Dashboard: React.FC = () => {
-  const pendingTasks = MOCK_TASKS.filter(t => t.status !== TaskStatus.DONE).length;
-  const pendingDocs = MOCK_DOCUMENTS.filter(d => d.status === 'pending').length;
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [recentSends, setRecentSends] = useState<any[]>([]);
+  const [companiesCount, setCompaniesCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const [t, c, s] = await Promise.all([
+          api.getTasks(),
+          api.getCompanies(),
+          api.getRecentSends()
+        ]);
+        setTasks(t);
+        setCompaniesCount(c.length);
+        setRecentSends(s);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadData();
+  }, []);
+
+  const pendingTasks = tasks.filter(t => t.status !== TaskStatus.DONE).length;
+  // Assuming total sent docs isn't tracked globally as a simple counter yet, using mock for that or count from log
+  const sentCount = 128; // Placeholder or calculate from logs if full history available
+
+  // Filter urgent tasks: Priority HIGH and not DONE
+  const urgentTasks = tasks.filter(t => t.priority === 'alta' && t.status !== TaskStatus.DONE);
+
+  if (loading) return <div className="flex justify-center p-10"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
 
   return (
     <div className="space-y-6">
@@ -40,7 +70,7 @@ const Dashboard: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatCard 
           title="Empresas Ativas" 
-          value={MOCK_COMPANIES.length} 
+          value={companiesCount} 
           icon={Building2} 
           color="bg-blue-500" 
         />
@@ -51,14 +81,14 @@ const Dashboard: React.FC = () => {
           color="bg-yellow-500" 
         />
         <StatCard 
-          title="Documentos Pendentes" 
-          value={pendingDocs} 
+          title="Tarefas Urgentes" 
+          value={urgentTasks.length} 
           icon={AlertCircle} 
           color="bg-red-500" 
         />
         <StatCard 
-          title="Envios Realizados" 
-          value={128} 
+          title="Envios Recentes" 
+          value={recentSends.length} 
           icon={CheckCircle2} 
           color="bg-green-500" 
         />
@@ -70,9 +100,8 @@ const Dashboard: React.FC = () => {
           <div className="p-6 border-b border-gray-100 flex justify-between items-center">
             <h3 className="font-bold text-gray-800 flex items-center gap-2">
               <FileText className="w-5 h-5 text-gray-500" />
-              Documentos Recentes
+              Últimos 5 Envios
             </h3>
-            <button className="text-sm text-blue-600 hover:underline">Ver todos</button>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">
@@ -80,22 +109,20 @@ const Dashboard: React.FC = () => {
                 <tr>
                   <th className="px-6 py-3">Empresa</th>
                   <th className="px-6 py-3">Documento</th>
-                  <th className="px-6 py-3">Vencimento</th>
+                  <th className="px-6 py-3">Data</th>
                   <th className="px-6 py-3">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {MOCK_DOCUMENTS.map((doc) => (
-                  <tr key={doc.id} className="border-b border-gray-50 hover:bg-gray-50">
-                    <td className="px-6 py-4 font-medium">{doc.companyName}</td>
-                    <td className="px-6 py-4 text-gray-500">{doc.category}</td>
-                    <td className="px-6 py-4 text-gray-500">{doc.dueDate}</td>
+                {recentSends.length === 0 ? (
+                    <tr><td colSpan={4} className="text-center py-4 text-gray-400">Nenhum envio recente.</td></tr>
+                ) : recentSends.map((log) => (
+                  <tr key={log.id} className="border-b border-gray-50 hover:bg-gray-50">
+                    <td className="px-6 py-4 font-medium">{log.companyName}</td>
+                    <td className="px-6 py-4 text-gray-500">{log.docName}</td>
+                    <td className="px-6 py-4 text-gray-500">{new Date(log.sentAt).toLocaleDateString('pt-BR')}</td>
                     <td className="px-6 py-4">
-                      {doc.status === 'sent' ? (
-                        <span className="px-2 py-1 rounded-full text-xs bg-green-100 text-green-700 font-medium">Enviado</span>
-                      ) : (
-                        <span className="px-2 py-1 rounded-full text-xs bg-yellow-100 text-yellow-700 font-medium">Pendente</span>
-                      )}
+                        <span className="px-2 py-1 rounded-full text-xs bg-green-100 text-green-700 font-medium">Sucesso</span>
                     </td>
                   </tr>
                 ))}
@@ -104,17 +131,19 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Recent Tasks */}
+        {/* Urgent Tasks */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="p-6 border-b border-gray-100 flex justify-between items-center">
             <h3 className="font-bold text-gray-800 flex items-center gap-2">
               <Clock className="w-5 h-5 text-gray-500" />
               Tarefas Urgentes
             </h3>
-            <button className="text-sm text-blue-600 hover:underline">Ver Kanban</button>
+            <span className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold">{urgentTasks.length}</span>
           </div>
-          <div className="p-6 space-y-4">
-            {MOCK_TASKS.filter(t => t.status !== TaskStatus.DONE).slice(0, 4).map(task => (
+          <div className="p-6 space-y-4 max-h-[300px] overflow-y-auto">
+            {urgentTasks.length === 0 ? (
+                <div className="text-center text-gray-400 py-4">Nenhuma tarefa urgente pendente.</div>
+            ) : urgentTasks.map(task => (
               <div key={task.id} className="flex items-center gap-4 p-3 rounded-lg border border-gray-100 hover:border-blue-200 transition-colors">
                 <div className="w-2 h-12 rounded-full" style={{ backgroundColor: task.color }}></div>
                 <div className="flex-1">
@@ -122,9 +151,8 @@ const Dashboard: React.FC = () => {
                   <p className="text-xs text-gray-500">{task.description}</p>
                 </div>
                 <div className="text-right">
-                  <span className={`text-xs px-2 py-1 rounded font-medium 
-                    ${task.priority === 'alta' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
-                    {task.priority.toUpperCase()}
+                  <span className={`text-xs px-2 py-1 rounded font-medium bg-red-100 text-red-700`}>
+                    ALTA
                   </span>
                 </div>
               </div>

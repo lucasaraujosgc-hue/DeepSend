@@ -45,6 +45,7 @@ export interface Document {
   companyId: number;
   companyName: string;
   file?: File; // Optional, might be a manual matrix entry
+  serverFilename?: string; // The file saved on server
   isManual?: boolean;
 }
 
@@ -70,6 +71,7 @@ export interface UploadedFile {
   category: string;
   dueDate: string;
   file: File;
+  serverFilename?: string;
 }
 
 export interface UserSettings {
