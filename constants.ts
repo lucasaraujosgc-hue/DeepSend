@@ -15,13 +15,7 @@ export const MOCK_DOCUMENTS: Document[] = [];
 export const MOCK_MESSAGES: ScheduledMessage[] = [];
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
-  emailSignature: `<html>
-    <body style="font-family: Arial, sans-serif; color: #2c3e50; line-height: 1.6;">
-        <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px;">
-        <strong>Prezados (a),</strong><br>
-            {mensagem_html}
-        </div>
-        <p>Atenciosamente,</p>
+  emailSignature: `<p>Atenciosamente,</p>
         <div style="margin-top: 20px; padding-top: 10px; border-top: 1px solid #eee;">
             <strong>Lucas Araújo</strong><br>
             <span style="color: #555;">Contador | CRC-BA 046968/O</span><br>
@@ -29,7 +23,10 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
         </div>
     </body>
 </html>`,
-  whatsappTemplate: `Olá! Segue documento referente a {competencia}. Qualquer dúvida estamos à disposição.`,
+  whatsappTemplate: `_Esses arquivos também foram enviados por e-mail_
+
+Atenciosamente,
+Lucas Araújo`,
   visibleDocumentCategories: [
     'Simples Nacional', 
     'Folha de Pagamento', 

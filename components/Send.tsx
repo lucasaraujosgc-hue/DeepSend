@@ -20,8 +20,8 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
 
   const [competence, setCompetence] = useState(getCurrentCompetence());
   const [subject, setSubject] = useState('Folha de Pagamento');
-  // Initialize message with the whatsapp template or a default, to allow user editing if desired
-  const [message, setMessage] = useState(userSettings.whatsappTemplate || 'Olá! Segue documento referente a {competencia}. Qualquer dúvida estamos à disposição.');
+  // Mensagem padrão fixa conforme solicitado
+  const [message, setMessage] = useState('Segue em anexo os seguintes documentos:');
   const [sendEmail, setSendEmail] = useState(true);
   const [sendWhatsapp, setSendWhatsapp] = useState(false);
   const [selectedDocs, setSelectedDocs] = useState<number[]>([]);
@@ -105,7 +105,7 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
             messageBody: message,
             channels: { email: sendEmail, whatsapp: sendWhatsapp },
             emailSignature: userSettings.emailSignature,
-            whatsappTemplate: message // Pass the potentially edited message as the template for this send
+            whatsappTemplate: userSettings.whatsappTemplate // Passamos a assinatura configurada como template
         });
 
         if (result.success) {
@@ -188,9 +188,9 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
                  </div>
              </div>
              <div>
-                 <label className="block text-sm font-semibold text-gray-700 mb-1">Mensagem (E-mail e WhatsApp)</label>
+                 <label className="block text-sm font-semibold text-gray-700 mb-1">Mensagem</label>
                  <textarea className="w-full border border-gray-300 rounded-lg px-3 py-2 h-24 outline-none focus:ring-2 focus:ring-blue-500" value={message} onChange={(e) => setMessage(e.target.value)} />
-                 <p className="text-xs text-gray-400 mt-1">Esta mensagem será usada no corpo do e-mail e no corpo da mensagem do WhatsApp (substituindo o padrão).</p>
+                 <p className="text-xs text-gray-400 mt-1">Esta mensagem aparecerá no corpo do e-mail e no início da mensagem do WhatsApp.</p>
              </div>
          </div>
       </div>

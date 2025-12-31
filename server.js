@@ -245,14 +245,13 @@ app.post('/api/send-documents', async (req, res) => {
                         `• ${att.docData.docName} (${att.docData.category}, Venc: ${att.docData.dueDate || 'N/A'})`
                     ).join('\n');
 
-                    // 2. Processar Template (O Template vem do usuário)
-                    // Substitui variáveis simples se existirem no template vindo do front
-                    let userMessage = whatsappTemplate || messageBody;
-                    userMessage = userMessage.replace('{competencia}', companyDocs[0].competence);
-                    userMessage = userMessage.replace('{empresa}', company.name);
-
-                    // 3. Montar Mensagem Completa (Lógica do Python)
-                    const mensagemCompleta = `*📄 Olá!* \n\n${userMessage}\n\n*Arquivos enviados:*\n${listaArquivos}\n\n_Esses arquivos também foram enviados por e-mail_\n\nAtenciosamente,\nLucas Araújo`;
+                    // 2. Processar Template de Assinatura (Footer)
+                    // O whatsappTemplate agora atua como Rodapé/Assinatura
+                    const whatsappSignature = whatsappTemplate || "_Esses arquivos também foram enviados por e-mail_\n\nAtenciosamente,\nLucas Araújo";
+                    
+                    // 3. Montar Mensagem Completa
+                    // Header Fixo + Corpo (Send Tab) + Lista + Rodapé (Config)
+                    const mensagemCompleta = `*📄 Olá!* \n\n${messageBody}\n\n*Arquivos enviados:*\n${listaArquivos}\n\n${whatsappSignature}`;
 
                     // 4. Enviar Texto
                     await client.sendMessage(chatId, mensagemCompleta);

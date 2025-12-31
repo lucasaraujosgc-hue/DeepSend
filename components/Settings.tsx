@@ -157,10 +157,10 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
               {/* WhatsApp Template */}
               <div className="space-y-2 pt-6 border-t border-gray-100">
                 <label className="block text-sm font-semibold text-gray-700 flex items-center gap-2">
-                  <MessageCircle className="w-4 h-4" /> Modelo de Mensagem WhatsApp
+                  <MessageCircle className="w-4 h-4" /> Assinatura / Rodapé do WhatsApp
                 </label>
                 <p className="text-xs text-gray-500">
-                    Variáveis disponíveis: <code>{`{competencia}`}</code>, <code>{`{empresa}`}</code>.
+                    Este texto será adicionado automaticamente ao final de todas as mensagens do WhatsApp.
                 </p>
                 <textarea 
                   className="w-full h-32 border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-green-500 outline-none"
