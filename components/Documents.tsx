@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive, Loader2 } from 'lucide-react';
+import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive, Loader2, FilePlus } from 'lucide-react';
 import { DOCUMENT_CATEGORIES } from '../constants';
-import { UserSettings, Document, Company } from '../types';
+import { UserSettings, Document, Company, UploadedFile } from '../types';
 import { identifyCategory, identifyCompany } from '../utils/documentProcessor';
 import { api } from '../services/api';
+import { calcularTodosVencimentos } from '../utils/dateHelpers';
 import JSZip from 'jszip';
 
 interface DocumentsProps {
@@ -11,13 +12,15 @@ interface DocumentsProps {
   onNavigateToUpload: (companyId: number, competence: string) => void;
   documents: Document[];
   onToggleStatus: (companyId: number, category: string, competence: string) => void;
+  onUploadSuccess: (files: UploadedFile[], companyId: number, competence: string) => void;
 }
 
 const Documents: React.FC<DocumentsProps> = ({ 
   userSettings, 
   onNavigateToUpload, 
   documents: initialDocuments,
-  onToggleStatus
+  onToggleStatus,
+  onUploadSuccess
 }) => {
   // Helper to get current competence formatted MM/YYYY
   const getCurrentCompetence = () => {
@@ -88,61 +91,161 @@ const Documents: React.FC<DocumentsProps> = ({
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-        const file = e.target.files[0];
-        setLocalPath(file.name);
+        const files = Array.from(e.target.files);
         
-        // Check if zip
-        if (file.name.endsWith('.zip') || file.name.endsWith('.rar')) {
-            await processZipFile(file);
+        // Update display text
+        if (files.length === 1) {
+            setLocalPath(files[0].name);
         } else {
-             alert("Por favor selecione um arquivo .ZIP");
+            setLocalPath(`${files.length} arquivos selecionados`);
+        }
+
+        // Check if user selected a ZIP file
+        const zipFile = files.find(f => f.name.endsWith('.zip') || f.name.endsWith('.rar'));
+        
+        if (zipFile) {
+             if (files.length > 1) {
+                 alert("Ao selecionar um arquivo ZIP, selecione apenas ele.");
+                 return;
+             }
+             await processZipFile(zipFile);
+        } else {
+             // Process regular files (PDFs, Images, etc.)
+             await processMultipleFiles(files);
         }
     }
+  };
+
+  // Process a list of standard files
+  const processMultipleFiles = async (fileList: File[]) => {
+      setProcessing(true);
+      setProcessingResults(null);
+      
+      const calculatedDates = calcularTodosVencimentos(processingCompetence);
+      let processedCount = 0;
+      let filteredCount = 0;
+
+      try {
+          for (const file of fileList) {
+             const textContent = file.name; // Use filename for categorization
+             const category = identifyCategory(textContent, userSettings.categoryKeywords);
+             const company = identifyCompany(textContent, companies);
+
+             const categoryFilter = selectedCategories.length > 0 ? selectedCategories : [];
+             const companyFilter = selectedCompanies.length > 0 ? selectedCompanies : [];
+
+             if (!category || (categoryFilter.length > 0 && !categoryFilter.includes(category))) {
+                 filteredCount++;
+                 continue;
+             }
+
+             if (!company || (companyFilter.length > 0 && !companyFilter.includes(String(company.id)))) {
+                 filteredCount++;
+                 continue;
+             }
+
+             // Real Upload
+             try {
+                const uploadRes = await api.uploadFile(file);
+                
+                const uploadedFile: UploadedFile = {
+                    name: file.name,
+                    size: file.size,
+                    category: category,
+                    dueDate: calculatedDates[category] || '',
+                    file: file,
+                    serverFilename: uploadRes.filename
+                };
+                
+                // Add to App state
+                onUploadSuccess([uploadedFile], company.id, processingCompetence);
+                processedCount++;
+             } catch (err) {
+                 console.error(`Falha ao enviar arquivo ${file.name}`, err);
+                 filteredCount++; // Consider upload fail as filtered/error
+             }
+          }
+
+          setProcessingResults({
+              total: fileList.length,
+              processed: processedCount,
+              filtered: filteredCount
+          });
+
+      } catch (e) {
+          console.error("Erro processando arquivos", e);
+          alert("Erro ao processar arquivos.");
+      } finally {
+          setProcessing(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+      }
   };
 
   const processZipFile = async (zipFile: File) => {
       setProcessing(true);
       setProcessingResults(null);
+      const calculatedDates = calcularTodosVencimentos(processingCompetence);
 
       try {
         const zip = await JSZip.loadAsync(zipFile);
-        const fileNames: string[] = [];
+        const entries: {name: string, obj: any}[] = [];
 
         zip.forEach((relativePath, zipEntry) => {
             if (!zipEntry.dir) {
-                fileNames.push(zipEntry.name);
+                entries.push({ name: zipEntry.name, obj: zipEntry });
             }
         });
 
         let processedCount = 0;
         let filteredCount = 0;
 
-        // Process extracted filenames
-        fileNames.forEach(fileName => {
-            const textContent = fileName; 
-            const category = identifyCategory(textContent, userSettings.categoryKeywords);
-            const company = identifyCompany(textContent, companies); // Use real companies
+        for (const entry of entries) {
+            const fileName = entry.name;
+            // Clean filename from path if needed
+            const simpleName = fileName.split('/').pop() || fileName;
+
+            const category = identifyCategory(simpleName, userSettings.categoryKeywords);
+            const company = identifyCompany(simpleName, companies);
 
             const categoryFilter = selectedCategories.length > 0 ? selectedCategories : [];
             const companyFilter = selectedCompanies.length > 0 ? selectedCompanies : [];
 
             if (!category || (categoryFilter.length > 0 && !categoryFilter.includes(category))) {
                 filteredCount++;
-                return;
+                continue;
             }
 
             if (!company || (companyFilter.length > 0 && !companyFilter.includes(String(company.id)))) {
                 filteredCount++;
-                return;
+                continue;
             }
 
-            processedCount++;
-            // Here you would upload the file to server in a real implementation
-            // console.log(`Processed: ${fileName}`);
-        });
+            // Convert ZipObject to Blob/File for upload
+            const blob = await entry.obj.async("blob");
+            const file = new File([blob], simpleName, { type: blob.type || 'application/pdf' });
+
+            try {
+                const uploadRes = await api.uploadFile(file);
+                
+                const uploadedFile: UploadedFile = {
+                    name: simpleName,
+                    size: file.size,
+                    category: category,
+                    dueDate: calculatedDates[category] || '',
+                    file: file,
+                    serverFilename: uploadRes.filename
+                };
+
+                onUploadSuccess([uploadedFile], company.id, processingCompetence);
+                processedCount++;
+            } catch (err) {
+                 console.error(`Falha ao enviar arquivo extraído ${simpleName}`, err);
+                 filteredCount++;
+            }
+        }
 
         setProcessingResults({
-            total: fileNames.length,
+            total: entries.length,
             processed: processedCount,
             filtered: filteredCount
         });
@@ -325,19 +428,20 @@ const Documents: React.FC<DocumentsProps> = ({
                 
                 {/* Path Input */}
                 <div className="lg:col-span-1">
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Arquivo ZIP / RAR</label>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">Arquivos (ZIP ou Múltiplos)</label>
                     <div className="input-group flex items-center border border-gray-300 rounded-lg overflow-hidden bg-white cursor-pointer hover:bg-gray-50" onClick={handleProcessClick}>
                          <span className="px-3 text-gray-400 bg-gray-50 border-r py-2"><FolderArchive className="w-4 h-4" /></span>
                          <input 
                             type="text" 
                             className="flex-1 px-3 py-2 outline-none text-sm cursor-pointer"
-                            placeholder="Selecionar arquivo .zip..."
+                            placeholder="Selecione arquivos ou ZIP..."
                             value={localPath}
                             readOnly
                          />
                          <input 
                             type="file" 
-                            accept=".zip,.rar"
+                            multiple
+                            accept=".zip,.rar,.pdf,.png,.jpg,.jpeg,.doc,.docx"
                             ref={fileInputRef} 
                             className="hidden" 
                             onChange={handleFileSelect} 
@@ -437,16 +541,19 @@ const Documents: React.FC<DocumentsProps> = ({
                     className="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 shadow-lg shadow-blue-500/20 font-bold flex items-center gap-2 disabled:opacity-70 transition-all"
                  >
                     {processing ? (
-                        <><Loader2 className="animate-spin rounded-full h-4 w-4" /> Lendo Arquivo ZIP...</>
+                        <><Loader2 className="animate-spin rounded-full h-4 w-4" /> Processando e Enviando...</>
                     ) : (
                         <><Play className="w-5 h-5" /> Iniciar Processamento Automático</>
                     )}
                  </button>
                  {processingResults && (
-                   <div className="mt-4 text-sm text-gray-600 bg-gray-50 p-2 rounded border border-gray-200">
-                      <strong>Resultado do ZIP:</strong> {processingResults.total} arquivos encontrados. 
-                      <span className="text-green-600 font-bold ml-2">{processingResults.processed} aceitos</span>. 
-                      <span className="text-red-500 font-bold ml-2">{processingResults.filtered} filtrados</span>.
+                   <div className="mt-4 text-sm text-gray-600 bg-gray-50 p-2 rounded border border-gray-200 text-center">
+                      <p><strong>Resultado do Processamento:</strong> {processingResults.total} arquivos analisados.</p>
+                      <div className="flex gap-4 justify-center mt-1">
+                          <span className="text-green-600 font-bold">{processingResults.processed} aceitos e enviados</span>
+                          <span className="text-red-500 font-bold">{processingResults.filtered} filtrados/erros</span>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-1">Os arquivos aceitos já estão disponíveis na aba "Envio".</p>
                    </div>
                  )}
             </div>

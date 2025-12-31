@@ -37,7 +37,6 @@ const App: React.FC = () => {
 
   // Handle new file upload from Upload tab
   const handleUploadSuccess = (files: UploadedFile[], companyId: number, competence: string) => {
-      // In a real app, this would fetch the company name from API or context
       const newDocs: Document[] = files.map(f => ({
           id: Date.now() + Math.random(),
           name: f.name,
@@ -46,8 +45,9 @@ const App: React.FC = () => {
           dueDate: f.dueDate,
           status: 'pending', 
           companyId: companyId,
-          companyName: 'Loading...', // Should be resolved
-          file: f.file
+          companyName: 'Loading...', // Should be resolved locally or via api fetch if critical
+          file: f.file,
+          serverFilename: f.serverFilename // Crucial for sending
       }));
       setDocuments(prev => [...prev, ...newDocs]);
   };
@@ -89,6 +89,7 @@ const App: React.FC = () => {
 
   // Handle Sending from Send Tab
   const handleSendDocuments = (docIds: number[]) => {
+      // Aqui só atualizamos status, não removemos se falhar.
       setDocuments(prev => prev.map(doc => {
           if (docIds.includes(doc.id)) {
               return { ...doc, status: 'sent' };
@@ -111,6 +112,7 @@ const App: React.FC = () => {
                   onNavigateToUpload={handleNavigateToUpload}
                   documents={documents}
                   onToggleStatus={handleToggleStatus}
+                  onUploadSuccess={handleUploadSuccess}
                />;
       case 'upload':
         return <Upload 

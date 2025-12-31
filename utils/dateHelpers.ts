@@ -1,4 +1,4 @@
-// Fixed holidays list (Day-Month) based on the Python snippet
+// Fixed holidays list (Day-Month)
 // (1, 1) -> "01-01"
 const FIXED_HOLIDAYS = [
   '01-01', // Ano Novo
@@ -11,6 +11,16 @@ const FIXED_HOLIDAYS = [
   '12-25'  // Natal
 ];
 
+// Feriados móveis (Exemplo para 2024 e 2025 - ideal seria calcular via API ou lógica de Páscoa, mas hardcoded é seguro para MVP)
+const MOBILE_HOLIDAYS = [
+    '2024-02-12', '2024-02-13', // Carnaval 2024
+    '2024-03-29', // Paixão de Cristo 2024
+    '2024-05-30', // Corpus Christi 2024
+    '2025-03-03', '2025-03-04', // Carnaval 2025
+    '2025-04-18', // Paixão de Cristo 2025
+    '2025-06-19', // Corpus Christi 2025
+];
+
 export const formatarData = (date: Date): string => {
   const dia = String(date.getDate()).padStart(2, '0');
   const mes = String(date.getMonth() + 1).padStart(2, '0');
@@ -21,18 +31,20 @@ export const formatarData = (date: Date): string => {
 export const isDiaUtil = (date: Date): boolean => {
   const diaSemana = date.getDay(); // 0=Sunday, 6=Saturday
   
-  // Python: if date.weekday() >= 5: return False
   if (diaSemana === 0 || diaSemana === 6) {
     return false;
   }
   
-  // Python: (date.month, date.day) not in feriados_fixos
-  // Note: Month in JS is 0-indexed for Date object methods, but 1-indexed for display strings usually.
-  // Using getMonth() + 1 to match the "01-01" format.
+  // Verifica feriados fixos
   const diaMes = `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-  
   if (FIXED_HOLIDAYS.includes(diaMes)) {
     return false;
+  }
+
+  // Verifica feriados móveis (formato YYYY-MM-DD)
+  const yyyyMmDd = date.toISOString().split('T')[0];
+  if (MOBILE_HOLIDAYS.includes(yyyyMmDd)) {
+      return false;
   }
   
   return true;
@@ -52,6 +64,7 @@ export const calcularQuintoDiaUtil = (mes: number, ano: number): string => {
   
   let dia = 1;
   let diasUteisEncontrados = 0;
+  // new Date(ano, mesIndex, dia) -> mesIndex 0 based
   let finalDate = new Date(next.ano, next.mes - 1, 1);
   
   // Loop until we find the 5th business day
@@ -77,10 +90,15 @@ export const calcularQuintoDiaUtil = (mes: number, ano: number): string => {
 export const calcularVencimentoComRegra = (mes: number, ano: number, diaVencimento: number, regra: 'antecipado' | 'postergado'): string => {
   const next = getNextMonth(mes, ano);
   
-  // Create date object for the target due day
+  // Create date object for the target due day (mes - 1 because Date uses 0-11)
   let date = new Date(next.ano, next.mes - 1, diaVencimento);
   
-  // Python logic port:
+  // Validar se a data é válida (ex: 30 de fevereiro não existe, vira março)
+  // Caso ocorra overflow, voltamos para o último dia do mês correto
+  if (date.getMonth() !== (next.mes - 1)) {
+     date = new Date(next.ano, next.mes, 0); // Último dia do mês correto
+  }
+
   if (!isDiaUtil(date)) {
       if (regra === 'antecipado') {
           // Move backward until business day found
@@ -102,9 +120,6 @@ export const calcularUltimoDiaUtil = (mes: number, ano: number): string => {
   const next = getNextMonth(mes, ano);
   
   // Get the last day of the *next* month
-  // Date(year, month, 0) gives the last day of the *previous* month index passed.
-  // next.mes is 1-12. Date constructor uses 0-11. 
-  // So new Date(ano, mes, 0) -> last day of mes.
   const ultimoDiaDoMes = new Date(next.ano, next.mes, 0).getDate();
   
   let date = new Date(next.ano, next.mes - 1, ultimoDiaDoMes);
@@ -127,12 +142,12 @@ export const calcularTodosVencimentos = (competencia: string): Record<string, st
 
   return {
       'Contracheque': calcularQuintoDiaUtil(mes, ano),
-      'Folha de Pagamento': calcularQuintoDiaUtil(mes, ano), // Assuming same as Contracheque
+      'Folha de Pagamento': calcularQuintoDiaUtil(mes, ano), 
       'FGTS': calcularVencimentoComRegra(mes, ano, 20, 'antecipado'),
       'INSS': calcularVencimentoComRegra(mes, ano, 20, 'antecipado'),
+      // Simples Nacional: Vence dia 20. Se feriado, posterga.
       'Simples Nacional': calcularVencimentoComRegra(mes, ano, 20, 'postergado'),
       'Parcelamento': calcularUltimoDiaUtil(mes, ano),
-      // Default rule for others (e.g., Honorarios might be day 10 postponed/anticipated depending on contract)
       'Honorários': calcularVencimentoComRegra(mes, ano, 10, 'postergado'), 
   };
 };

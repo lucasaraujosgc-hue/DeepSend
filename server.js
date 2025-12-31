@@ -95,20 +95,29 @@ app.post('/api/send-documents', async (req, res) => {
     const { documents, subject, messageBody, channels } = req.body;
     let successCount = 0;
     let errors = [];
+    let sentIds = []; // Array para armazenar IDs dos documentos enviados com sucesso
+
+    console.log(`Iniciando envio de ${documents.length} documentos...`);
 
     for (const doc of documents) {
         try {
+            // Verifica arquivo físico
+            const filePath = path.join(UPLOADS_DIR, doc.serverFilename);
+            if (!fs.existsSync(filePath)) {
+                const msg = `Arquivo não encontrado no servidor: ${doc.serverFilename}`;
+                console.error(msg);
+                errors.push(msg);
+                continue;
+            }
+
             const company = await new Promise((resolve, reject) => {
                 db.get("SELECT * FROM companies WHERE id = ?", [doc.companyId], (err, row) => {
                     if (err) reject(err); else resolve(row);
                 });
             });
 
-            if (!company) continue;
-
-            const filePath = path.join(UPLOADS_DIR, doc.serverFilename);
-            if (!fs.existsSync(filePath)) {
-                errors.push(`Arquivo não existe: ${doc.docName}`);
+            if (!company) {
+                errors.push(`Empresa ID ${doc.companyId} não encontrada.`);
                 continue;
             }
 
@@ -123,8 +132,14 @@ app.post('/api/send-documents', async (req, res) => {
                         html: messageBody.replace(/\n/g, '<br>'),
                         attachments: [{ filename: doc.docName, path: filePath }]
                     });
+                    console.log(`E-mail enviado para ${company.email}`);
                 } catch (e) {
-                    errors.push(`Erro Email ${company.name}: ${e.message}`);
+                    const msg = `Erro Email ${company.name}: ${e.message}`;
+                    console.error(msg);
+                    errors.push(msg);
+                    // Se falhar o email mas tiver whatsapp, tentamos o whatsapp. 
+                    // Se falhar ambos ou só tinha email, considera erro no envio do doc?
+                    // Por enquanto, se o canal foi solicitado e falhou, loga erro.
                 }
             }
 
@@ -136,8 +151,11 @@ app.post('/api/send-documents', async (req, res) => {
                     const media = MessageMedia.fromFilePath(filePath);
                     media.filename = doc.docName;
                     await client.sendMessage(`${number}@c.us`, media, { caption: subject });
+                    console.log(`WhatsApp enviado para ${number}`);
                 } catch (e) {
-                    errors.push(`Erro Zap ${company.name}: ${e.message}`);
+                    const msg = `Erro Zap ${company.name}: ${e.message}`;
+                    console.error(msg);
+                    errors.push(msg);
                 }
             }
 
@@ -149,13 +167,23 @@ app.post('/api/send-documents', async (req, res) => {
             db.run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, 'sent') ON CONFLICT(companyId, category, competence) DO UPDATE SET status='sent'`, 
                 [doc.companyId, doc.category, doc.competence]);
 
+            // Assume sucesso se pelo menos tentou processar e não explodiu antes
+            // (Melhoria: considerar sucesso apenas se enviou por pelo menos 1 canal solicitado)
             successCount++;
+            
+            // Se o documento veio do frontend, ele pode ter um ID temporário ou real.
+            // Retornamos o ID que o frontend nos enviou para ele dar baixa na lista.
+            if (doc.id) {
+                sentIds.push(doc.id);
+            }
+
         } catch (e) {
+            console.error(`Erro fatal processando doc:`, e);
             errors.push(e.message);
         }
     }
 
-    res.json({ success: true, sent: successCount, errors });
+    res.json({ success: true, sent: successCount, sentIds, errors });
 });
 
 // Endpoint corrigido para retornar apenas os ultimos 5

@@ -86,9 +86,10 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
     const docsToSend = documents
         .filter(d => selectedDocs.includes(d.id))
         .map(d => ({
+            id: d.id, // Enviar ID para o servidor retornar em caso de sucesso
             companyId: d.companyId,
             companyName: d.companyName,
-            serverFilename: d.serverFilename || d.name, // Use stored server filename or fallback
+            serverFilename: d.serverFilename || d.name, // Deve existir se foi feito upload correto
             docName: d.name,
             category: d.category,
             competence: d.competence
@@ -103,11 +104,19 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
         });
 
         if (result.success) {
-            onSendDocuments(selectedDocs);
-            setSelectedDocs([]);
-            alert(`Envio finalizado! Sucessos: ${result.sent}. Erros: ${result.errors.length}`);
+            // Remove apenas os que o servidor confirmou que enviou (ou tentou processar com sucesso parcial)
+            const successIds = result.sentIds || [];
+            
+            if (successIds.length > 0) {
+                onSendDocuments(successIds);
+                // Atualiza seleção removendo os enviados
+                setSelectedDocs(prev => prev.filter(id => !successIds.includes(id)));
+            }
+            
+            alert(`Processamento finalizado!\nSucessos: ${result.sent}\nErros: ${result.errors.length}\n${result.errors.length > 0 ? 'Verifique os logs no servidor para detalhes.' : ''}`);
+            
             if (result.errors.length > 0) {
-                console.warn(result.errors);
+                console.warn("Erros detalhados:", result.errors);
             }
         } else {
             alert("Erro ao processar envio no servidor.");
