@@ -24,8 +24,8 @@
     "qrcode": "^1.5.4",
     "uuid": "^13.0.0",
     "multer": "^2.0.2",
-    "whatsapp-web.js": "^1.23.0",
-    "puppeteer": "^22.0.0"
+    "whatsapp-web.js": "^1.26.0",
+    "puppeteer-core": "^22.0.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.37",
