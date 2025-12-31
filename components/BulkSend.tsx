@@ -1,24 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import { Mail, MessageCircle, Calendar, Send, CheckSquare, Square, ArrowLeft, Loader2 } from 'lucide-react';
+import { Mail, MessageCircle, Calendar, Send, CheckSquare, Square, ArrowLeft, Loader2, CheckCircle } from 'lucide-react';
 import { Company } from '../types';
 import { api } from '../services/api';
 
 const BulkSend: React.FC = () => {
   const [companyType, setCompanyType] = useState<'normal' | 'mei'>('normal');
   const [schedule, setSchedule] = useState(false);
+  const [subject, setSubject] = useState('Comunicado Importante');
+  const [message, setMessage] = useState(`Prezados,\n\nGostaríamos de informar que...\n\nAtenciosamente,\nEquipe Contábil`);
+  const [channels, setChannels] = useState({ email: true, whatsapp: false });
   
   // Real Data
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
   const [selectedCompanies, setSelectedCompanies] = useState<number[]>([]);
+  const [result, setResult] = useState<any>(null);
 
   useEffect(() => {
     setLoading(true);
     api.getCompanies()
         .then(data => {
             setCompanies(data);
-            // Default select all matches current type logic if needed, but safer to start clean
-            // Or select all of the default type
             const defaultTypeIds = data.filter(c => c.type !== 'MEI').map(c => c.id);
             setSelectedCompanies(defaultTypeIds);
         })
@@ -34,26 +37,40 @@ const BulkSend: React.FC = () => {
   const toggleSelectAll = () => {
       const filteredIds = filteredCompanies.map(c => c.id);
       const allSelected = filteredIds.every(id => selectedCompanies.includes(id));
-      
       if (allSelected) {
-          // Deselect only the visible ones
           setSelectedCompanies(prev => prev.filter(id => !filteredIds.includes(id)));
       } else {
-          // Add missing visible ones
-          const newSelection = [...new Set([...selectedCompanies, ...filteredIds])];
-          setSelectedCompanies(newSelection);
+          setSelectedCompanies(prev => [...new Set([...prev, ...filteredIds])]);
       }
   };
 
   const toggleCompany = (id: number) => {
-      if (selectedCompanies.includes(id)) {
-          setSelectedCompanies(prev => prev.filter(cid => cid !== id));
-      } else {
-          setSelectedCompanies(prev => [...prev, id]);
-      }
+      setSelectedCompanies(prev => prev.includes(id) ? prev.filter(cid => cid !== id) : [...prev, id]);
   };
   
-  // Check if all filtered are selected
+  const handleSendNow = async () => {
+      const currentSelected = selectedCompanies.filter(id => filteredCompanies.some(c => c.id === id));
+      if (currentSelected.length === 0) return alert("Selecione pelo menos uma empresa.");
+      if (!channels.email && !channels.whatsapp) return alert("Selecione pelo menos um canal.");
+
+      setSending(true);
+      setResult(null);
+      try {
+          const res = await api.bulkSend({
+              companyIds: currentSelected,
+              subject,
+              message,
+              channels
+          });
+          setResult(res);
+          alert(`Envio concluído! Emails: ${res.email}, WhatsApp: ${res.whatsapp}`);
+      } catch (e) {
+          alert("Erro no envio em massa: " + e.message);
+      } finally {
+          setSending(false);
+      }
+  };
+
   const areAllFilteredSelected = filteredCompanies.length > 0 && filteredCompanies.every(c => selectedCompanies.includes(c.id));
 
   if (loading) return <div className="flex justify-center p-10"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
@@ -87,17 +104,22 @@ const BulkSend: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
               <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Assunto do E-mail</label>
-                  <input type="text" className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500" defaultValue="Comunicado Importante" />
+                  <input 
+                    type="text" 
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500" 
+                    value={subject} 
+                    onChange={e => setSubject(e.target.value)} 
+                  />
               </div>
               <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Opções de Envio</label>
                   <div className="flex gap-4 pt-2">
                       <label className="flex items-center gap-2 cursor-pointer">
-                          <input type="checkbox" className="rounded text-blue-600 w-4 h-4" defaultChecked />
+                          <input type="checkbox" className="rounded text-blue-600 w-4 h-4" checked={channels.email} onChange={e => setChannels({...channels, email: e.target.checked})} />
                           <span className="flex items-center gap-1 text-sm"><Mail className="w-4 h-4" /> E-mail</span>
                       </label>
                       <label className="flex items-center gap-2 cursor-pointer">
-                          <input type="checkbox" className="rounded text-green-600 w-4 h-4" />
+                          <input type="checkbox" className="rounded text-green-600 w-4 h-4" checked={channels.whatsapp} onChange={e => setChannels({...channels, whatsapp: e.target.checked})} />
                           <span className="flex items-center gap-1 text-sm"><MessageCircle className="w-4 h-4" /> WhatsApp</span>
                       </label>
                   </div>
@@ -108,7 +130,8 @@ const BulkSend: React.FC = () => {
               <label className="block text-sm font-semibold text-gray-700 mb-1">Mensagem</label>
               <textarea 
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 h-32"
-                defaultValue={`Prezados,\n\nGostaríamos de informar que...\n\nAtenciosamente,\nEquipe Contábil`}
+                value={message}
+                onChange={e => setMessage(e.target.value)}
               ></textarea>
           </div>
 
@@ -140,32 +163,33 @@ const BulkSend: React.FC = () => {
               </div>
           </div>
 
-          <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-6">
-              <label className="flex items-center gap-2 cursor-pointer mb-2">
-                  <input 
-                    type="checkbox" 
-                    checked={schedule} 
-                    onChange={(e) => setSchedule(e.target.checked)}
-                    className="w-4 h-4 rounded text-blue-600" 
-                  />
-                  <span className="font-semibold text-gray-700 flex items-center gap-1">
-                      <Calendar className="w-4 h-4" /> Agendar Envio
-                  </span>
-              </label>
-              {schedule && (
-                  <div className="mt-3 pl-6">
-                      <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Data e Hora</label>
-                      <input type="datetime-local" className="border border-gray-300 rounded-lg px-3 py-2 outline-none text-sm bg-white" />
-                  </div>
-              )}
-          </div>
+          {result && (
+              <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm">
+                  <h4 className="font-bold flex items-center gap-2"><CheckCircle className="w-4 h-4 text-green-500" /> Relatório do Último Envio</h4>
+                  <p>Enviados por E-mail: {result.email}</p>
+                  <p>Enviados por WhatsApp: {result.whatsapp}</p>
+                  {result.errors.length > 0 && (
+                      <div className="mt-2">
+                          <p className="font-bold text-red-600">Erros:</p>
+                          <ul className="list-disc pl-4 text-red-500">
+                              {result.errors.slice(0, 5).map((err, i) => <li key={i}>{err}</li>)}
+                          </ul>
+                      </div>
+                  )}
+              </div>
+          )}
 
           <div className="flex justify-end gap-3">
               <button className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg flex items-center gap-2">
                   <ArrowLeft className="w-4 h-4" /> Voltar
               </button>
-              <button className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 shadow-lg shadow-blue-500/20 flex items-center gap-2">
-                  {schedule ? 'Agendar Envio' : 'Enviar Agora'} <Send className="w-4 h-4" />
+              <button 
+                onClick={handleSendNow}
+                disabled={sending}
+                className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 shadow-lg shadow-blue-500/20 flex items-center gap-2 disabled:opacity-70"
+              >
+                  {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  {sending ? 'Enviando...' : 'Enviar Agora'}
               </button>
           </div>
       </div>

@@ -65,5 +65,44 @@ export const api = {
 
   disconnectWhatsApp: async (): Promise<void> => {
     await fetch(`${API_URL}/whatsapp/disconnect`, { method: 'POST' });
+  },
+
+  // Envio de E-mail
+  sendEmail: async (data: { to: string; subject: string; html: string; attachments: File[] }): Promise<any> => {
+    const formData = new FormData();
+    formData.append('to', data.to);
+    formData.append('subject', data.subject);
+    formData.append('html', data.html);
+    data.attachments.forEach(file => formData.append('attachments', file));
+
+    const res = await fetch(`${API_URL}/send-email`, {
+      method: 'POST',
+      body: formData
+    });
+    return res.json();
+  },
+
+  // Envio de WhatsApp
+  sendWhatsApp: async (data: { to: string; message: string; attachments: File[] }): Promise<any> => {
+    const formData = new FormData();
+    formData.append('to', data.to);
+    formData.append('message', data.message);
+    data.attachments.forEach(file => formData.append('attachments', file));
+
+    const res = await fetch(`${API_URL}/whatsapp/send`, {
+      method: 'POST',
+      body: formData
+    });
+    return res.json();
+  },
+
+  // Envio em Massa
+  bulkSend: async (data: { companyIds: number[]; subject: string; message: string; channels: { email: boolean; whatsapp: boolean } }): Promise<any> => {
+    const res = await fetch(`${API_URL}/bulk-send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    return res.json();
   }
 };
