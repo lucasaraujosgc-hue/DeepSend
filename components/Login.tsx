@@ -1,15 +1,15 @@
-
 import React, { useState } from 'react';
-import { Lock, User, LogIn, Loader2, AlertCircle } from 'lucide-react';
+import { Lock, User, LogIn, Loader2, AlertCircle, CheckSquare } from 'lucide-react';
 import { api } from '../services/api';
 
 interface LoginProps {
-  onLoginSuccess: () => void;
+  onLoginSuccess: (token?: string, remember?: boolean) => void;
 }
 
 const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const [user, setUser] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -19,9 +19,9 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
     setError('');
 
     try {
-      const success = await api.login(user, password);
-      if (success) {
-        onLoginSuccess();
+      const result = await api.login(user, password);
+      if (result.success) {
+        onLoginSuccess(result.token, rememberMe);
       } else {
         setError('Usuário ou senha incorretos.');
       }
@@ -78,6 +78,18 @@ const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 required
               />
             </div>
+          </div>
+
+          <div className="flex items-center">
+             <label className="flex items-center gap-2 cursor-pointer group">
+                <input 
+                  type="checkbox" 
+                  className="w-4 h-4 rounded text-blue-600 border-gray-300 focus:ring-blue-500"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                />
+                <span className="text-sm text-gray-600 group-hover:text-blue-600 transition-colors">Permanecer conectado</span>
+             </label>
           </div>
 
           <button 

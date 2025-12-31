@@ -12,7 +12,8 @@ import {
   Menu,
   X,
   Mails,
-  UserCog
+  UserCog,
+  LogOut
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -20,9 +21,10 @@ interface SidebarProps {
   setActivePage: (page: string) => void;
   isOpen: boolean;
   setIsOpen: (isOpen: boolean) => void;
+  onLogout?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage, isOpen, setIsOpen }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage, isOpen, setIsOpen, onLogout }) => {
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'companies', label: 'Empresas', icon: Building2 },
@@ -50,7 +52,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage, isOpen, se
 
       {/* Sidebar Container */}
       <div className={`
-        fixed inset-y-0 left-0 z-40 w-64 bg-slate-900 text-white transform transition-transform duration-300 ease-in-out
+        fixed inset-y-0 left-0 z-40 w-64 bg-slate-900 text-white transform transition-transform duration-300 ease-in-out flex flex-col
         ${isOpen ? 'translate-x-0' : '-translate-x-full'}
         md:relative md:translate-x-0
       `}>
@@ -61,7 +63,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage, isOpen, se
           <span className="text-xl font-bold tracking-tight">Contábil Pro</span>
         </div>
 
-        <nav className="p-4 space-y-1 mt-14 md:mt-0">
+        <nav className="p-4 space-y-1 mt-14 md:mt-0 flex-1 overflow-y-auto">
           {menuItems.map((item) => {
             const Icon = item.icon;
             const isActive = activePage === item.id;
@@ -84,6 +86,19 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage, isOpen, se
             );
           })}
         </nav>
+
+        {/* Logout Section */}
+        {onLogout && (
+            <div className="p-4 border-t border-slate-800">
+                <button 
+                    onClick={onLogout}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-slate-400 hover:bg-red-500/10 hover:text-red-400 transition-colors duration-200"
+                >
+                    <LogOut className="w-5 h-5" />
+                    <span className="font-medium">Sair do Sistema</span>
+                </button>
+            </div>
+        )}
       </div>
     </>
   );

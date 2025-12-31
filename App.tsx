@@ -1,5 +1,4 @@
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import Kanban from './components/Kanban';
@@ -29,8 +28,29 @@ const App: React.FC = () => {
   // State for pre-filling Upload form
   const [uploadPreFill, setUploadPreFill] = useState<{companyId: number, competence: string} | null>(null);
 
+  // Check for stored token on mount
+  useEffect(() => {
+    const token = localStorage.getItem('cm_auth_token');
+    if (token) {
+        setIsAuthenticated(true);
+    }
+  }, []);
+
+  const handleLoginSuccess = (token?: string, remember?: boolean) => {
+      if (remember && token) {
+          localStorage.setItem('cm_auth_token', token);
+      }
+      setIsAuthenticated(true);
+  };
+
+  const handleLogout = () => {
+      localStorage.removeItem('cm_auth_token');
+      setIsAuthenticated(false);
+      setActivePage('dashboard');
+  };
+
   if (!isAuthenticated) {
-    return <Login onLoginSuccess={() => setIsAuthenticated(true)} />;
+    return <Login onLoginSuccess={handleLoginSuccess} />;
   }
 
   const handleNavigateToUpload = (companyId: number, competence: string) => {
@@ -157,6 +177,7 @@ const App: React.FC = () => {
         setActivePage={setActivePage} 
         isOpen={isSidebarOpen}
         setIsOpen={setIsSidebarOpen}
+        onLogout={handleLogout}
       />
       
       <main className="flex-1 overflow-auto w-full relative">

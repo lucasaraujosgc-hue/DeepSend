@@ -1,11 +1,10 @@
-
 import { Company, Task, Document } from '../types';
 
 const API_URL = '/api';
 
 export const api = {
   // Authentication
-  login: async (user: string, pass: string): Promise<boolean> => {
+  login: async (user: string, pass: string): Promise<{ success: boolean; token?: string }> => {
     try {
       const res = await fetch(`${API_URL}/login`, {
         method: 'POST',
@@ -13,13 +12,13 @@ export const api = {
         body: JSON.stringify({ user, password: pass }),
       });
       
-      if (!res.ok) return false;
+      if (!res.ok) return { success: false };
       
       const data = await res.json();
-      return data.success === true;
+      return { success: data.success, token: data.token };
     } catch (error) {
       console.error("Login failed", error);
-      return false;
+      return { success: false };
     }
   },
 
