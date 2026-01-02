@@ -140,14 +140,11 @@ const Documents: React.FC<DocumentsProps> = ({
           }
 
           // LOG PARA DEBUG
-          console.log('📄 Arquivo:', file.name);
+          console.log(`--- Analisando: ${file.name} ---`);
           
           // 2. NORMALIZAÇÃO UNIFICADA (Igual ao Python)
-          // Combina texto do PDF + Nome do arquivo para maximizar chances
           const textForAnalysis = removeAccents((pdfText + " " + file.name).toLowerCase());
           
-          console.log('🔍 Texto Analisado:', textForAnalysis.substring(0, 300));
-
           // 3. Identificação da Empresa
           let detectedCompanyId: number | null = null;
           
@@ -157,9 +154,10 @@ const Documents: React.FC<DocumentsProps> = ({
               // Identifica usando o texto "rico" normalizado
               const company = identifyCompany(textForAnalysis, companies);
               if (company) {
+                  console.log(`✅ Empresa identificada: ${company.name} (CNPJ: ${company.docNumber})`);
                   detectedCompanyId = company.id;
               } else {
-                  console.warn(`⚠️ Empresa não identificada: ${file.name}`);
+                  console.warn(`❌ Empresa NÃO identificada. Texto analisado (primeiros 100 chars): ${textForAnalysis.substring(0, 100)}...`);
               }
           }
 
@@ -169,12 +167,8 @@ const Documents: React.FC<DocumentsProps> = ({
               detectedCategory = processingCategoryFilter;
           } else {
               const category = identifyCategory(textForAnalysis, userSettings.categoryKeywords, userSettings.priorityCategories);
-              // Fallback para 'Outros' se não encontrar, em vez de deixar vazio ou ignorar
               detectedCategory = category ?? 'Outros';
-              
-              if (!category) {
-                  console.warn(`⚠️ Categoria não identificada (definida como Outros): ${file.name}`);
-              }
+              console.log(`Categoria: ${detectedCategory}`);
           }
 
           tempFiles.push({
@@ -229,12 +223,9 @@ const Documents: React.FC<DocumentsProps> = ({
                  }
             }
 
-            console.log('📄 Arquivo (ZIP):', simpleName);
+            console.log(`--- Analisando ZIP item: ${simpleName} ---`);
 
-            // 2. NORMALIZAÇÃO UNIFICADA
             const textForAnalysis = removeAccents((pdfText + " " + simpleName).toLowerCase());
-
-            console.log('🔍 Texto Analisado:', textForAnalysis.substring(0, 300));
 
             // 3. Identificação Empresa
             let detectedCompanyId: number | null = null;
@@ -242,7 +233,12 @@ const Documents: React.FC<DocumentsProps> = ({
                 detectedCompanyId = Number(processingCompanyId);
             } else {
                 const company = identifyCompany(textForAnalysis, companies);
-                if (company) detectedCompanyId = company.id;
+                if (company) {
+                    console.log(`✅ Empresa: ${company.name}`);
+                    detectedCompanyId = company.id;
+                } else {
+                    console.warn(`❌ Empresa não encontrada no ZIP.`);
+                }
             }
 
             // 4. Identificação Categoria

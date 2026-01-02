@@ -35,14 +35,12 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
 
       const pageText = textContent.items
         .map((item: any) => item.str)
-        .join(' ')
+        .join(' ') // Join with space to prevent glued words
         .trim();
 
       fullText += pageText + ' ';
     }
 
-    // Retorna o que achou, sem validar tamanho. 
-    // O Python fazia exatamente isso (extract_text() + " ").
     return fullText.trim(); 
   } catch (error) {
     console.error(`❌ Erro ao extrair texto do PDF: ${file.name}`, error);
@@ -51,8 +49,7 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
 };
 
 /**
- * Identifies the category based on text content, keywords map, and priority rules.
- * Expects normalized text input.
+ * Identifies the category based on text content.
  */
 export const identifyCategory = (
     textNormalized: string, 
@@ -60,16 +57,14 @@ export const identifyCategory = (
     priorityCategories: string[] = []
 ): string | null => {
   
-  // Text is assumed to be already normalized by caller for performance/consistency
   const matchedCategories: string[] = [];
 
-  // 1. Scan User Keywords (Dynamic)
+  // 1. Scan User Keywords
   for (const [category, keywords] of Object.entries(keywordMap)) {
     if (!keywords || !Array.isArray(keywords)) continue;
     
     for (const keyword of keywords) {
       if (!keyword) continue;
-      // Keywords should be normalized in settings, but safety check here
       const kwNormalized = removeAccents(keyword);
       if (kwNormalized.length > 2 && textNormalized.includes(kwNormalized)) {
         if (!matchedCategories.includes(category)) {
@@ -85,11 +80,7 @@ export const identifyCategory = (
       if (!matchedCategories.includes('Honorários')) matchedCategories.push('Honorários');
   }
   
-  if (
-      (textNormalized.includes('nota fiscal') || 
-       textNormalized.includes('danfe') || 
-       textNormalized.includes('nf-e'))
-  ) {
+  if (textNormalized.includes('nota fiscal') || textNormalized.includes('danfe') || textNormalized.includes('nf-e')) {
       if (!matchedCategories.includes('Notas Fiscais')) matchedCategories.push('Notas Fiscais');
   }
 
@@ -101,24 +92,17 @@ export const identifyCategory = (
       if (!matchedCategories.includes('Folha de Pagamento')) matchedCategories.push('Folha de Pagamento');
   }
 
-  if (
-      textNormalized.includes('documento de arrecadacao') && 
-      (textNormalized.includes('simples nacional') || textNormalized.includes('das'))
-  ) {
+  if (textNormalized.includes('documento de arrecadacao') && (textNormalized.includes('simples nacional') || textNormalized.includes('das'))) {
       if (!matchedCategories.includes('Simples Nacional')) matchedCategories.push('Simples Nacional');
   }
 
-  if (
-      textNormalized.includes('fgts') && 
-      (textNormalized.includes('guia') || textNormalized.includes('digital') || textNormalized.includes('fundo de garantia'))
-  ) {
+  if (textNormalized.includes('fgts') && (textNormalized.includes('guia') || textNormalized.includes('digital') || textNormalized.includes('fundo de garantia'))) {
       if (!matchedCategories.includes('FGTS')) matchedCategories.push('FGTS');
   }
 
   if (matchedCategories.length === 0) return null;
   if (matchedCategories.length === 1) return matchedCategories[0];
 
-  // 3. Resolve Conflict using Priority
   const priorityMatch = matchedCategories.find(cat => priorityCategories.includes(cat));
   if (priorityMatch) return priorityMatch;
 
@@ -126,42 +110,50 @@ export const identifyCategory = (
 };
 
 /**
- * Identifies the company using STRICT version provided.
- * Expects normalized text input.
+ * Identifies the company using STRICT numeric matching OR Loose Name matching.
  */
 export const identifyCompany = (textNormalized: string, companies: Company[]): Company | null => {
   if (!textNormalized) return null;
 
-  // 1. Extrai TODOS os blocos numéricos possíveis (mesmo quebrados)
-  const numericGroups = textNormalized
-    .replace(/[^\d]/g, ' ')
-    .split(' ')
-    .filter(n => n.length >= 4);
-
-  // Junta tudo também (fallback)
-  const fullNumeric = numericGroups.join('');
+  // 1. ESTRATÉGIA NUMÉRICA "BRUTA"
+  // Remove TUDO que não for número do texto do PDF. 
+  // Ex: "CNPJ: 12.345.678/0001-90" vira "12345678000190"
+  // Isso resolve o problema de formatação, espaços extras ou quebras de linha no meio do número.
+  const textOnlyNumbers = textNormalized.replace(/\D/g, '');
 
   for (const company of companies) {
     const companyDocClean = company.docNumber.replace(/\D/g, '');
+    
+    // Ignora empresas com cadastro incompleto
     if (companyDocClean.length < 8) continue;
 
-    const root = companyDocClean.substring(0, 8);
-
-    // ✔ Match direto
-    if (fullNumeric.includes(root)) return company;
-
-    // ✔ Match fragmentado (PDF quebrado)
-    for (const group of numericGroups) {
-      if (group.includes(root) || root.includes(group)) {
+    // A. Match Completo (Ex: CPF ou CNPJ inteiro)
+    if (textOnlyNumbers.includes(companyDocClean)) {
         return company;
-      }
+    }
+
+    // B. Match Raiz CNPJ (Primeiros 8 dígitos)
+    // Útil se o PDF tiver a filial diferente ou erro no final
+    const root = companyDocClean.substring(0, 8);
+    if (textOnlyNumbers.includes(root)) {
+        return company;
     }
   }
 
-  // 2. Fallback por nome (seguro) - textNormalized já contém o nome do arquivo concatenado se o caller fez certo
+  // 2. ESTRATÉGIA POR NOME (Fallback)
+  // Remove termos comuns que atrapalham o match exato
+  const commonTerms = ['ltda', 's.a', 'me', 'epp', 'eireli', 'limitada', 'sa'];
+  
   for (const company of companies) {
-    const nameNoAccents = removeAccents(company.name);
-    if (nameNoAccents.length > 4 && textNormalized.includes(nameNoAccents)) {
+    let nameClean = removeAccents(company.name);
+    
+    // Remove sufixos comuns do nome da empresa para buscar o "nome fantasia" implícito
+    commonTerms.forEach(term => {
+        nameClean = nameClean.replace(new RegExp(`\\b${term}\\b`, 'g'), '').trim();
+    });
+
+    // Só busca se sobrar um nome relevante (> 4 letras)
+    if (nameClean.length > 4 && textNormalized.includes(nameClean)) {
       return company;
     }
   }
