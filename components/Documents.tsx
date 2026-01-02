@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive, Loader2, FilePlus, AlertTriangle, Trash } from 'lucide-react';
 import { DOCUMENT_CATEGORIES } from '../constants';
 import { UserSettings, Document, Company, UploadedFile } from '../types';
-import { identifyCategory, identifyCompany, extractTextFromPDF } from '../utils/documentProcessor';
+import { identifyCategory, identifyCompany, extractTextFromPDF, removeAccents } from '../utils/documentProcessor';
 import { api } from '../services/api';
 import { calcularTodosVencimentos } from '../utils/dateHelpers';
 import JSZip from 'jszip';
@@ -141,6 +141,13 @@ const Documents: React.FC<DocumentsProps> = ({
               }
           }
 
+          // LOG PARA DEBUG
+          console.log('📄 Arquivo:', file.name);
+          console.log('🧾 Texto extraído (primeiros 300):', extractedText.substring(0, 300));
+          
+          // NORMALIZAÇÃO PRÉVIA
+          const normalizedText = removeAccents(extractedText.toLowerCase());
+
           // B. Identificação da Empresa (Prioridade: Texto > Nome)
           let detectedCompanyId: number | null = null;
           
@@ -150,14 +157,15 @@ const Documents: React.FC<DocumentsProps> = ({
           } else {
               let company = null;
               
-              // Tenta identificar pelo CONTEÚDO (Texto Extraído)
-              if (extractedText && extractedText.length > 5) {
-                   company = identifyCompany(extractedText, companies);
+              // Tenta identificar pelo CONTEÚDO (Texto Normalizado)
+              if (normalizedText && normalizedText.length > 5) {
+                   company = identifyCompany(normalizedText, companies);
               }
 
               // Fallback: Tenta identificar pelo NOME DO ARQUIVO se falhou no conteúdo
               if (!company) {
-                   company = identifyCompany(file.name, companies);
+                   const normalizedFileName = removeAccents(file.name.toLowerCase());
+                   company = identifyCompany(normalizedFileName, companies);
               }
 
               detectedCompanyId = company ? company.id : null;
@@ -169,7 +177,7 @@ const Documents: React.FC<DocumentsProps> = ({
               detectedCategory = processingCategoryFilter;
           } else {
               // Concatena texto e nome para maximizar chances de achar keywords
-              const textForCategory = (extractedText + " " + file.name).trim();
+              const textForCategory = (normalizedText + " " + removeAccents(file.name.toLowerCase())).trim();
               detectedCategory = identifyCategory(textForCategory, userSettings.categoryKeywords, userSettings.priorityCategories) || '';
           }
 
@@ -228,6 +236,13 @@ const Documents: React.FC<DocumentsProps> = ({
                  }
             }
 
+            // LOG PARA DEBUG
+            console.log('📄 Arquivo (ZIP):', simpleName);
+            console.log('🧾 Texto extraído (primeiros 300):', extractedText.substring(0, 300));
+
+            // NORMALIZAÇÃO PRÉVIA
+            const normalizedText = removeAccents(extractedText.toLowerCase());
+
             // B. Identificação Empresa
             let detectedCompanyId: number | null = null;
             if (processingCompanyId) {
@@ -235,12 +250,13 @@ const Documents: React.FC<DocumentsProps> = ({
             } else {
                 let company = null;
                 
-                if (extractedText && extractedText.length > 5) {
-                    company = identifyCompany(extractedText, companies);
+                if (normalizedText && normalizedText.length > 5) {
+                    company = identifyCompany(normalizedText, companies);
                 }
 
                 if (!company) {
-                    company = identifyCompany(simpleName, companies);
+                    const normalizedFileName = removeAccents(simpleName.toLowerCase());
+                    company = identifyCompany(normalizedFileName, companies);
                 }
 
                 detectedCompanyId = company ? company.id : null;
@@ -251,7 +267,7 @@ const Documents: React.FC<DocumentsProps> = ({
             if (processingCategoryFilter) {
                 detectedCategory = processingCategoryFilter;
             } else {
-                const textForCategory = (extractedText + " " + simpleName).trim();
+                const textForCategory = (normalizedText + " " + removeAccents(simpleName.toLowerCase())).trim();
                 detectedCategory = identifyCategory(textForCategory, userSettings.categoryKeywords, userSettings.priorityCategories) || '';
             }
 

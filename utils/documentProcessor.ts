@@ -14,62 +14,42 @@ export const removeAccents = (text: string): string => {
 };
 
 /**
- * Extracts text content from a PDF file using Visual Layout Reconstruction (XY Sorting).
- * This fixes issues where text from different columns gets mixed up or words are broken.
+ * Extracts text content from a PDF file using a robust strategy with logging.
  */
 export const extractTextFromPDF = async (file: File): Promise<string> => {
   try {
     const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-    const pdf = await loadingTask.promise;
-    let fullText = "";
 
-    const maxPages = Math.min(pdf.numPages, 5);
-    
-    for (let i = 1; i <= maxPages; i++) {
+    const loadingTask = pdfjsLib.getDocument({
+      data: arrayBuffer,
+      verbosity: 0
+    });
+
+    const pdf = await loadingTask.promise;
+    let fullText = '';
+
+    for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      
-      // 1. Map items with their coordinates
-      const items = textContent.items.map((item: any) => ({
-        str: item.str,
-        x: item.transform[4],
-        y: item.transform[5],
-        w: item.width,
-        hasEOL: item.hasEOL
-      }));
 
-      // 2. Group items into visual lines based on Y coordinate tolerance
-      const lines: { y: number; items: typeof items }[] = [];
-      const TOLERANCE_Y = 6;
+      const pageText = textContent.items
+        .map((item: any) => item.str)
+        .join(' ')
+        .trim();
 
-      for (const item of items) {
-        const existingLine = lines.find(l => Math.abs(l.y - item.y) < TOLERANCE_Y);
-        if (existingLine) {
-          existingLine.items.push(item);
-        } else {
-          lines.push({ y: item.y, items: [item] });
-        }
-      }
-
-      // 3. Sort lines Top-to-Bottom
-      lines.sort((a, b) => b.y - a.y);
-
-      // 4. Sort items within each line Left-to-Right (Ascending X) and join
-      const pageStrings = lines.map(line => {
-        line.items.sort((a, b) => a.x - b.x);
-        return line.items.map(item => item.str).join(' ');
-      });
-
-      fullText += pageStrings.join('\n') + '\n';
+      fullText += pageText + ' ';
     }
-    
-    // Normalize return: Remove accents, collapse multiple spaces to single space
-    return removeAccents(fullText).replace(/\s+/g, ' ').trim();
 
+    const cleanedText = fullText.trim();
+
+    if (cleanedText.length < 20) {
+      console.warn(`⚠️ PDF sem texto detectável ou muito curto: ${file.name}`);
+    }
+
+    return cleanedText;
   } catch (error) {
-    console.error("Erro ao ler PDF:", error);
-    return "";
+    console.error(`❌ Erro ao extrair texto do PDF: ${file.name}`, error);
+    return '';
   }
 };
 
