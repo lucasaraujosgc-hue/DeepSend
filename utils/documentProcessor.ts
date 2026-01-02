@@ -14,7 +14,7 @@ export const removeAccents = (text: string): string => {
 };
 
 /**
- * Extracts text content from a PDF file.
+ * Extracts text content from a PDF file preserving layout structure.
  */
 export const extractTextFromPDF = async (file: File): Promise<string> => {
   try {
@@ -29,12 +29,25 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
     for (let i = 1; i <= maxPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      // Join with space to prevent words from sticking together
-      const pageText = textContent.items.map((item: any) => item.str).join(" ");
-      fullText += pageText + " ";
+      
+      let lastY: number | null = null;
+      let pageText = '';
+
+      // Advanced extraction preserving visual lines
+      for (const item of textContent.items as any[]) {
+        if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
+          pageText += '\n'; // Add newline on significant vertical shift
+        }
+        pageText += item.str + ' ';
+        lastY = item.transform[5];
+      }
+
+      fullText += pageText + '\n';
     }
     
-    return fullText;
+    // Normalize return: Remove accents, collapse multiple spaces to single space, trim
+    return removeAccents(fullText).replace(/\s+/g, ' ').trim();
+
   } catch (error) {
     console.error("Erro ao ler PDF:", error);
     return "";
@@ -55,6 +68,8 @@ export const identifyCategory = (
     priorityCategories: string[] = []
 ): string | null => {
   
+  // Note: Text is already normalized by extractTextFromPDF (accents removed, lowercased)
+  // But we run removeAccents again just to be safe if passed raw string
   const textNormalized = removeAccents(text);
   const matchedCategories: string[] = [];
 
@@ -74,13 +89,49 @@ export const identifyCategory = (
     }
   }
 
-  // 2. Scan Hardcoded Fallbacks (only if not found yet, OR if we want to allow overlap to be resolved by priority)
-  // To stick to "Priority Button" logic, we should add hardcoded matches to the list and let priority decide.
-  if (textNormalized.includes('cora.com.br') && !matchedCategories.includes('Honorários')) matchedCategories.push('Honorários');
-  if (textNormalized.includes('nota fiscal') && !matchedCategories.includes('Notas Fiscais')) matchedCategories.push('Notas Fiscais');
-  if (textNormalized.includes('folha mensal') && textNormalized.includes('extrato mensal') && !matchedCategories.includes('Folha de Pagamento')) matchedCategories.push('Folha de Pagamento');
-  if (textNormalized.includes('simples nacional') && (textNormalized.includes('documento de arrecadacao') || textNormalized.includes('das')) && !matchedCategories.includes('Simples Nacional')) matchedCategories.push('Simples Nacional');
-  if (textNormalized.includes('fgts') && (textNormalized.includes('guia') || textNormalized.includes('digital')) && !matchedCategories.includes('FGTS')) matchedCategories.push('FGTS');
+  // 2. Scan Hardcoded Fallbacks (Robust check)
+  
+  // Honorários
+  if (textNormalized.includes('cora.com.br') && !matchedCategories.includes('Honorários')) {
+      matchedCategories.push('Honorários');
+  }
+  
+  // Notas Fiscais (Expanded keywords)
+  if (
+      (textNormalized.includes('nota fiscal') || 
+       textNormalized.includes('danfe') || 
+       textNormalized.includes('nf-e')) && 
+      !matchedCategories.includes('Notas Fiscais')
+  ) {
+      matchedCategories.push('Notas Fiscais');
+  }
+
+  // Folha
+  if (
+      textNormalized.includes('folha mensal') && 
+      textNormalized.includes('extrato mensal') && 
+      !matchedCategories.includes('Folha de Pagamento')
+  ) {
+      matchedCategories.push('Folha de Pagamento');
+  }
+
+  // Simples Nacional
+  if (
+      textNormalized.includes('simples nacional') && 
+      (textNormalized.includes('documento de arrecadacao') || textNormalized.includes('das')) && 
+      !matchedCategories.includes('Simples Nacional')
+  ) {
+      matchedCategories.push('Simples Nacional');
+  }
+
+  // FGTS
+  if (
+      textNormalized.includes('fgts') && 
+      (textNormalized.includes('guia') || textNormalized.includes('digital')) && 
+      !matchedCategories.includes('FGTS')
+  ) {
+      matchedCategories.push('FGTS');
+  }
 
   if (matchedCategories.length === 0) return null;
   if (matchedCategories.length === 1) return matchedCategories[0];
@@ -98,11 +149,20 @@ export const identifyCategory = (
 };
 
 /**
- * Identifies the company based on text content using strict 8-digit logic for CNPJ.
+ * Identifies the company based on text content using strict Regex logic.
  */
 export const identifyCompany = (text: string, companies: Company[]): Company | null => {
-  // Regex pattern EXACTLY as provided in Python.
-  const pattern = /(\d{2}.\d{3}.\d{3}\/\d{4}-\d{2})|(\d{3}.\d{3}.\d{3}-\d{2})|(\d{14})|(\d{11})|(\d{2}.\d{3}.\d{3})|(\d{3}.\d{3}.\d{3})|(\d{8})|(\d{9})/g;
+  // Regex pattern strict on dots (\.) to avoid false positives.
+  // Groups:
+  // 1: CNPJ Full (\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})
+  // 2: CPF Full (\d{3}\.\d{3}\.\d{3}-\d{2})
+  // 3: CNPJ 14 digits (\d{14})
+  // 4: CPF 11 digits (\d{11})
+  // 5: CNPJ Partial 1 (\d{2}\.\d{3}\.\d{3})
+  // 6: CPF Partial 1 (\d{3}\.\d{3}\.\d{3})
+  // 7: CNPJ Partial 2 (\d{8})
+  // 8: CPF Partial 2 (\d{9})
+  const pattern = /(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})|(\d{3}\.\d{3}\.\d{3}-\d{2})|(\d{14})|(\d{11})|(\d{2}\.\d{3}\.\d{3})|(\d{3}\.\d{3}\.\d{3})|(\d{8})|(\d{9})/g;
   
   const matches = [...text.matchAll(pattern)];
   const foundDocs: {type: 'CNPJ' | 'CPF', val: string}[] = [];
@@ -117,8 +177,7 @@ export const identifyCompany = (text: string, companies: Company[]): Company | n
       // Logic:
       // If CNPJ -> Clean non-digits -> Take substring(0, 8)
       // If CPF -> Clean non-digits -> Keep full (usually) or partial depending on logic.
-      // Python: cnpj_limpo[:8] for CNPJs.
-
+      
       if (cnpjCompleto) {
           const clean = cnpjCompleto.replace(/\D/g, ''); 
           foundDocs.push({ type: 'CNPJ', val: clean.substring(0, 8) }); 
@@ -133,7 +192,7 @@ export const identifyCompany = (text: string, companies: Company[]): Company | n
           foundDocs.push({ type: 'CPF', val: clean });
       } else if (cnpjParcial1) { 
           const clean = cnpjParcial1.replace(/\D/g, '');
-          foundDocs.push({ type: 'CNPJ', val: clean }); // Usually 8 digits here
+          foundDocs.push({ type: 'CNPJ', val: clean }); 
       } else if (cpfParcial1) { 
           const clean = cpfParcial1.replace(/\D/g, '');
           foundDocs.push({ type: 'CPF', val: clean });
@@ -162,7 +221,7 @@ export const identifyCompany = (text: string, companies: Company[]): Company | n
                   // DB (Full 14 chars) vs Extracted (First 8 chars)
                   // We take first 8 of DB to compare
                   const dbRoot = companyDocClean.substring(0, 8);
-                  const foundRoot = item.val; // Already 8 chars from logic above
+                  const foundRoot = item.val; 
 
                   if (dbRoot === foundRoot) {
                       return company;
