@@ -23,7 +23,8 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
     const pdf = await loadingTask.promise;
     let fullText = "";
 
-    const maxPages = Math.min(pdf.numPages, 5); // Limit to 5 pages
+    // Read up to 5 pages to save performance but get enough context
+    const maxPages = Math.min(pdf.numPages, 5);
     
     for (let i = 1; i <= maxPages; i++) {
       const page = await pdf.getPage(i);
@@ -42,39 +43,57 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
 
 /**
  * Identifies the category based on text content and keywords map.
+ * CHANGE: User settings (keywordMap) now have PRIORITY over hardcoded rules.
  */
 export const identifyCategory = (text: string, keywordMap: Record<string, string[]>): string | null => {
   const textNormalized = removeAccents(text);
 
-  // Priority 1: Exclusive rules (Hardcoded for safety)
-  if (textNormalized.includes('cora.com.br')) return 'Honorários';
-  if (textNormalized.includes('nota fiscal')) return 'Notas Fiscais';
-  if (textNormalized.includes('folha mensal') && textNormalized.includes('extrato mensal')) {
-    return 'Folha de Pagamento';
-  }
-
-  // Priority 2: Dynamic User Settings
+  // 1. Priority: Dynamic User Settings (Vinculações)
+  // This ensures user configuration overrides system defaults
   for (const [category, keywords] of Object.entries(keywordMap)) {
     if (!keywords || !Array.isArray(keywords)) continue;
     
     for (const keyword of keywords) {
       if (!keyword) continue;
       const kwNormalized = removeAccents(keyword);
-      if (textNormalized.includes(kwNormalized)) {
+      // Strict check to avoid empty string matching everything
+      if (kwNormalized.length > 0 && textNormalized.includes(kwNormalized)) {
         return category;
       }
     }
+  }
+
+  // 2. Fallback: Hardcoded/System Rules (Only if no user rule matched)
+  if (textNormalized.includes('cora.com.br')) return 'Honorários';
+  if (textNormalized.includes('nota fiscal')) return 'Notas Fiscais';
+  if (textNormalized.includes('folha mensal') && textNormalized.includes('extrato mensal')) {
+    return 'Folha de Pagamento';
+  }
+  if (textNormalized.includes('simples nacional') && (textNormalized.includes('documento de arrecadacao') || textNormalized.includes('das'))) {
+      return 'Simples Nacional';
+  }
+  if (textNormalized.includes('fgts') && (textNormalized.includes('guia') || textNormalized.includes('digital'))) {
+      return 'FGTS';
   }
 
   return null;
 };
 
 /**
- * Identifies the company based on text content using robust Regex and hierarchical logic.
+ * Identifies the company based on text content using Python logic translation.
  */
 export const identifyCompany = (text: string, companies: Company[]): Company | null => {
-  // Regex pattern derived from Python code:
-  // Note: Using unescaped '.' allows matching any character (like spaces or dots), handling '12 345 678'
+  // Regex pattern EXACTLY as provided in Python.
+  // Note: In JS Regex, '.' means 'any character' (except newline), which works great for OCR noise.
+  // Groups mapping based on Python structure:
+  // 1: CNPJ Full (\d{2}.\d{3}.\d{3}/\d{4}-\d{2})
+  // 2: CPF Full (\d{3}.\d{3}.\d{3}-\d{2})
+  // 3: CNPJ 14 digits (\d{14})
+  // 4: CPF 11 digits (\d{11})
+  // 5: CNPJ Partial 1 (\d{2}.\d{3}.\d{3})
+  // 6: CPF Partial 1 (\d{3}.\d{3}.\d{3})
+  // 7: CNPJ Partial 2 (\d{8})
+  // 8: CPF Partial 2 (\d{9})
   const pattern = /(\d{2}.\d{3}.\d{3}\/\d{4}-\d{2})|(\d{3}.\d{3}.\d{3}-\d{2})|(\d{14})|(\d{11})|(\d{2}.\d{3}.\d{3})|(\d{3}.\d{3}.\d{3})|(\d{8})|(\d{9})/g;
   
   const matches = [...text.matchAll(pattern)];
@@ -94,18 +113,19 @@ export const identifyCompany = (text: string, companies: Company[]): Company | n
           cpfParcial2      // Group 8
       ] = match;
 
-      // Clean using \D to remove ANY non-digit char (dots, spaces, dashes, slashes)
-      // This ensures '12.345.678' and '12 345 678' both become '12345678'
+      // Logic mirrored from Python:
+      // If CNPJ (Full or Simple), we extract the FIRST 8 DIGITS (Raiz).
+      // If CPF, we extract digits.
 
       if (cnpjCompleto) {
-          const clean = cnpjCompleto.replace(/\D/g, '');
-          foundDocs.push({ type: 'CNPJ', val: clean.substring(0, 8) }); // Root CNPJ
+          const clean = cnpjCompleto.replace(/\D/g, ''); // Remove non-digits
+          foundDocs.push({ type: 'CNPJ', val: clean.substring(0, 8) }); // Python: cnpj_limpo[:8]
       } else if (cpfCompleto) {
           const clean = cpfCompleto.replace(/\D/g, '');
           foundDocs.push({ type: 'CPF', val: clean });
       } else if (cnpjSimples) {
           const clean = cnpjSimples.replace(/\D/g, '');
-          foundDocs.push({ type: 'CNPJ', val: clean.substring(0, 8) });
+          foundDocs.push({ type: 'CNPJ', val: clean.substring(0, 8) }); // Python: cnpj_simples[:8]
       } else if (cpfSimples) {
           const clean = cpfSimples.replace(/\D/g, '');
           foundDocs.push({ type: 'CPF', val: clean });
@@ -130,15 +150,18 @@ export const identifyCompany = (text: string, companies: Company[]): Company | n
   );
 
   // 1. Search in DB by Doc Number Partial Match
+  // Python logic: Empresa.cpf_cnpj.like(f"%{parcial}%")
+  // Means: Does the DATABASE DOCUMENT contain the FOUND PARTIAL?
   for (const item of uniqueFoundDocs) {
       for (const company of companies) {
-          // Clean DB doc number for pure digit comparison
           const companyDocClean = company.docNumber.replace(/\D/g, '');
           
           if (company.type === 'CNPJ' || company.type === 'MEI') {
-              // If found item is CNPJ, check if company is CNPJ/MEI
-              if (item.type === 'CNPJ' && companyDocClean.includes(item.val)) {
-                  return company;
+              if (item.type === 'CNPJ') {
+                  // Check if Company Doc (e.g. 58560180000100) includes the partial (e.g. 58560180)
+                  if (companyDocClean.includes(item.val)) {
+                      return company;
+                  }
               }
           } 
           
@@ -157,7 +180,6 @@ export const identifyCompany = (text: string, companies: Company[]): Company | n
     const nameNoAccents = removeAccents(company.name);
     
     // Check if company name appears in text
-    // Limit to reasonable length to avoid noise (e.g. company name "S.A.")
     if (nameNoAccents.length > 2 && textNoAccents.includes(nameNoAccents)) {
         return company;
     }
