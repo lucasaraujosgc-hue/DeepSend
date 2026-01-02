@@ -126,35 +126,49 @@ const Documents: React.FC<DocumentsProps> = ({
       const tempFiles: PreviewFile[] = [];
 
       for (const file of fileList) {
-          // Default: use filename
-          let textContent = file.name;
-          
-          // Force PDF extraction if extension is .pdf (ignore mime type which can be flaky)
+          let extractedText = "";
+
+          // 1. EXTRACT TEXT FIRST (If PDF)
           if (file.name.toLowerCase().endsWith('.pdf')) {
               try {
-                const extracted = await extractTextFromPDF(file);
-                // Concatenate extracted text to filename to give detection maximum context
-                if (extracted && extracted.length > 5) {
-                    textContent += " " + extracted;
-                }
-              } catch(e) { console.warn("PDF Read error", e); }
+                // Ensure we extract the text before any identification logic
+                extractedText = await extractTextFromPDF(file);
+              } catch(e) { 
+                console.warn("PDF Read error", e); 
+              }
           }
 
-          // Logic: If filter is selected, force it. Else, detect.
+          // 2. IDENTIFY COMPANY (Strict Priority: Text -> Filename)
           let detectedCompanyId: number | null = null;
+          
           if (processingCompanyId) {
+              // Manual filter override
               detectedCompanyId = Number(processingCompanyId);
           } else {
-              const company = identifyCompany(textContent, companies);
+              let company = null;
+              
+              // A. Try with PDF Content ONLY
+              if (extractedText && extractedText.length > 5) {
+                   company = identifyCompany(extractedText, companies);
+              }
+
+              // B. Fallback to Filename if Content failed
+              if (!company) {
+                   company = identifyCompany(file.name, companies);
+              }
+
               detectedCompanyId = company ? company.id : null;
           }
 
+          // 3. IDENTIFY CATEGORY
           let detectedCategory = '';
           if (processingCategoryFilter) {
               detectedCategory = processingCategoryFilter;
           } else {
-              // Pass userSettings keywords to identifier, INCLUDING PRIORITY
-              detectedCategory = identifyCategory(textContent, userSettings.categoryKeywords, userSettings.priorityCategories) || '';
+              // For category, we CAN combine to increase hit rate (keywords might be in filename)
+              // But if you prefer strict:
+              const textForCategory = (extractedText + " " + file.name).trim();
+              detectedCategory = identifyCategory(textForCategory, userSettings.categoryKeywords, userSettings.priorityCategories) || '';
           }
 
           tempFiles.push({
@@ -197,31 +211,44 @@ const Documents: React.FC<DocumentsProps> = ({
             const type = simpleName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : blob.type;
             const file = new File([blob], simpleName, { type });
 
-            let textContent = simpleName; 
-            
+            let extractedText = "";
+
+            // 1. EXTRACT TEXT FIRST
             if (simpleName.toLowerCase().endsWith('.pdf')) {
                  try {
-                     const extracted = await extractTextFromPDF(file);
-                     if (extracted && extracted.length > 5) {
-                         textContent += " " + extracted;
-                     }
-                 } catch(e) {}
+                     extractedText = await extractTextFromPDF(file);
+                 } catch(e) {
+                     console.warn("Zip PDF Read error", e);
+                 }
             }
 
-            // Logic: Filter vs Detection
+            // 2. IDENTIFY COMPANY (Strict Priority)
             let detectedCompanyId: number | null = null;
             if (processingCompanyId) {
                 detectedCompanyId = Number(processingCompanyId);
             } else {
-                const company = identifyCompany(textContent, companies);
+                let company = null;
+                
+                // A. Try Content
+                if (extractedText && extractedText.length > 5) {
+                    company = identifyCompany(extractedText, companies);
+                }
+
+                // B. Fallback to Filename
+                if (!company) {
+                    company = identifyCompany(simpleName, companies);
+                }
+
                 detectedCompanyId = company ? company.id : null;
             }
 
+            // 3. IDENTIFY CATEGORY
             let detectedCategory = '';
             if (processingCategoryFilter) {
                 detectedCategory = processingCategoryFilter;
             } else {
-                detectedCategory = identifyCategory(textContent, userSettings.categoryKeywords, userSettings.priorityCategories) || '';
+                const textForCategory = (extractedText + " " + simpleName).trim();
+                detectedCategory = identifyCategory(textForCategory, userSettings.categoryKeywords, userSettings.priorityCategories) || '';
             }
 
             tempFiles.push({

@@ -1,186 +1,196 @@
+
 import { Company } from '../types';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Worker do PDF.js (mesma versão)
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  'https://esm.sh/pdfjs-dist@3.11.174/build/pdf.worker.min.mjs';
+// Define worker URL explicitly using the same version as the library
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://esm.sh/pdfjs-dist@3.11.174/build/pdf.worker.min.mjs';
 
 /**
- * Remove acentos e normaliza texto
+ * Normalizes text to remove accents (NFD normalization).
  */
 export const removeAccents = (text: string): string => {
-  if (!text) return '';
-  return text
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase();
+  if (!text) return "";
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 };
 
 /**
- * Extrai a raiz do CNPJ (8 primeiros dígitos), ignorando pontuação
- */
-const getCnpjRoot = (value: string): string | null => {
-  if (!value) return null;
-  const digits = value.replace(/\D/g, '');
-  if (digits.length < 8) return null;
-  return digits.substring(0, 8);
-};
-
-/**
- * Extrai texto do PDF (máx. 2 páginas)
- * Reconstrói layout por coordenadas (XY)
+ * Extracts text content from a PDF file using Visual Layout Reconstruction (XY Sorting).
+ * This fixes issues where text from different columns gets mixed up or words are broken.
  */
 export const extractTextFromPDF = async (file: File): Promise<string> => {
   try {
-    const buffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+    const arrayBuffer = await file.arrayBuffer();
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    let fullText = "";
 
-    let fullText = '';
-    const maxPages = Math.min(pdf.numPages, 2);
-
+    const maxPages = Math.min(pdf.numPages, 5);
+    
     for (let i = 1; i <= maxPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-
+      
+      // 1. Map items with their coordinates
+      // transform[4] is X (horizontal), transform[5] is Y (vertical)
       const items = textContent.items.map((item: any) => ({
-        text: item.str,
+        str: item.str,
         x: item.transform[4],
-        y: item.transform[5]
+        y: item.transform[5],
+        w: item.width,
+        hasEOL: item.hasEOL
       }));
 
-      // Agrupar por linha (Y)
-      const lines: { y: number; texts: typeof items }[] = [];
+      // 2. Group items into visual lines based on Y coordinate tolerance
+      // PDF Y-coordinates usually go from bottom to top, or top to bottom depending on origin.
+      // We group items that are roughly on the same vertical level (tolerance of 5px)
+      const lines: { y: number; items: typeof items }[] = [];
       const TOLERANCE_Y = 6;
 
       for (const item of items) {
-        const line = lines.find(l => Math.abs(l.y - item.y) < TOLERANCE_Y);
-        if (line) {
-          line.texts.push(item);
+        // Find an existing line that matches the Y coordinate within tolerance
+        const existingLine = lines.find(l => Math.abs(l.y - item.y) < TOLERANCE_Y);
+        
+        if (existingLine) {
+          existingLine.items.push(item);
         } else {
-          lines.push({ y: item.y, texts: [item] });
+          lines.push({ y: item.y, items: [item] });
         }
       }
 
-      // Ordenar de cima para baixo
+      // 3. Sort lines Top-to-Bottom
       lines.sort((a, b) => b.y - a.y);
 
-      for (const line of lines) {
-        line.texts.sort((a, b) => a.x - b.x);
-        fullText += line.texts.map(t => t.text).join(' ') + '\n';
-      }
-    }
+      // 4. Sort items within each line Left-to-Right (Ascending X) and join
+      const pageStrings = lines.map(line => {
+        // Sort items by X
+        line.items.sort((a, b) => a.x - b.x);
+        // Join items with smart spacing
+        return line.items.map(item => item.str).join(' ');
+      });
 
+      fullText += pageStrings.join('\n') + '\n';
+    }
+    
+    // Normalize return: Remove accents, collapse multiple spaces to single space
     return removeAccents(fullText).replace(/\s+/g, ' ').trim();
+
   } catch (error) {
-    console.error('Erro ao ler PDF:', error);
-    return '';
+    console.error("Erro ao ler PDF:", error);
+    return "";
   }
 };
 
 /**
- * Identifica categoria do documento
+ * Identifies the category based on text content, keywords map, and priority rules.
  */
 export const identifyCategory = (
-  text: string,
-  keywordMap: Record<string, string[]>,
-  priorityCategories: string[] = []
+    text: string, 
+    keywordMap: Record<string, string[]>, 
+    priorityCategories: string[] = []
 ): string | null => {
+  
+  const textNormalized = removeAccents(text);
+  const matchedCategories: string[] = [];
 
-  const normalized = removeAccents(text);
-  const matches: string[] = [];
-
-  // Palavras-chave configuráveis
+  // 1. Scan User Keywords (Dynamic)
   for (const [category, keywords] of Object.entries(keywordMap)) {
-    for (const kw of keywords || []) {
-      const k = removeAccents(kw);
-      if (k.length > 2 && normalized.includes(k)) {
-        matches.push(category);
-        break;
+    if (!keywords || !Array.isArray(keywords)) continue;
+    
+    for (const keyword of keywords) {
+      if (!keyword) continue;
+      const kwNormalized = removeAccents(keyword);
+      // Ensure keyword is not just a common letter/number to avoid false positives
+      if (kwNormalized.length > 2 && textNormalized.includes(kwNormalized)) {
+        if (!matchedCategories.includes(category)) {
+            matchedCategories.push(category);
+        }
+        break; 
       }
     }
   }
 
-  // Regras fixas
-  if (normalized.includes('cora.com.br') || normalized.includes('honorarios')) {
-    matches.push('Honorários');
+  // 2. Scan Hardcoded Fallbacks
+  if (textNormalized.includes('cora.com.br') || textNormalized.includes('honorarios')) {
+      if (!matchedCategories.includes('Honorários')) matchedCategories.push('Honorários');
+  }
+  
+  if (
+      (textNormalized.includes('nota fiscal') || 
+       textNormalized.includes('danfe') || 
+       textNormalized.includes('nf-e'))
+  ) {
+      if (!matchedCategories.includes('Notas Fiscais')) matchedCategories.push('Notas Fiscais');
   }
 
   if (
-    normalized.includes('nota fiscal') ||
-    normalized.includes('danfe') ||
-    normalized.includes('nf-e')
+      (textNormalized.includes('folha') && textNormalized.includes('pagamento')) ||
+      (textNormalized.includes('resumo') && textNormalized.includes('folha')) ||
+      textNormalized.includes('extrato mensal')
   ) {
-    matches.push('Notas Fiscais');
+      if (!matchedCategories.includes('Folha de Pagamento')) matchedCategories.push('Folha de Pagamento');
   }
 
   if (
-    (normalized.includes('folha') && normalized.includes('pagamento')) ||
-    normalized.includes('extrato mensal')
+      textNormalized.includes('documento de arrecadacao') && 
+      (textNormalized.includes('simples nacional') || textNormalized.includes('das'))
   ) {
-    matches.push('Folha de Pagamento');
+      if (!matchedCategories.includes('Simples Nacional')) matchedCategories.push('Simples Nacional');
   }
 
   if (
-    normalized.includes('documento de arrecadacao') &&
-    normalized.includes('simples nacional')
+      textNormalized.includes('fgts') && 
+      (textNormalized.includes('guia') || textNormalized.includes('digital') || textNormalized.includes('fundo de garantia'))
   ) {
-    matches.push('Simples Nacional');
+      if (!matchedCategories.includes('FGTS')) matchedCategories.push('FGTS');
   }
 
-  if (
-    normalized.includes('fgts') &&
-    (normalized.includes('guia') || normalized.includes('fundo de garantia'))
-  ) {
-    matches.push('FGTS');
-  }
+  if (matchedCategories.length === 0) return null;
+  if (matchedCategories.length === 1) return matchedCategories[0];
 
-  if (matches.length === 0) return null;
-  if (matches.length === 1) return matches[0];
+  // 3. Resolve Conflict using Priority
+  const priorityMatch = matchedCategories.find(cat => priorityCategories.includes(cat));
+  if (priorityMatch) return priorityMatch;
 
-  // Prioridade
-  const priority = matches.find(m => priorityCategories.includes(m));
-  return priority ?? matches[0];
+  return matchedCategories[0];
 };
 
 /**
- * Identifica empresa pelo CNPJ (com ou sem pontuação)
+ * Identifies the company using strictly the ROOT (first 8 digits) of the CNPJ.
+ * Normalizes both the input text and the DB records to digits only.
+ * This ensures matches even if OCR misses dots, dashes or adds spaces.
  */
-export const identifyCompany = (
-  text: string,
-  companies: Company[]
-): Company | null => {
+export const identifyCompany = (text: string, companies: Company[]): Company | null => {
+  if (!text) return null;
 
-  // Captura CNPJ em QUALQUER formato
-  const cnpjRegex =
-    /\d{2}\s*\.\s*\d{3}\s*\.\s*\d{3}\s*\/\s*\d{4}\s*-\s*\d{2}|\d{14}|\d{8}/g;
+  // 1. Clean the haystack (Input Text) -> Keep only digits
+  const textNumeric = text.replace(/\D/g, ''); 
+  
+  // 2. Normalize text for name fallback
+  const textNormalized = removeAccents(text);
 
-  const matches = [...text.matchAll(cnpjRegex)];
-
-  const rootsFromText = matches
-    .map(m => getCnpjRoot(m[0]))
-    .filter((v): v is string => !!v);
-
-  const uniqueRoots = [...new Set(rootsFromText)];
-
-  // Comparação CORRETA: raiz x raiz
+  // --- STRATEGY: ROOT MATCH (8 Digits) ---
   for (const company of companies) {
-    if (company.type !== 'CNPJ' && company.type !== 'MEI') continue;
+      // Clean DB Document
+      const companyDocClean = company.docNumber.replace(/\D/g, '');
+      
+      // We need at least 8 digits to compare a root safely
+      if (companyDocClean.length < 8) continue;
 
-    const companyRoot = getCnpjRoot(company.docNumber);
-    if (!companyRoot) continue;
+      // Extract Root (first 8 digits)
+      const companyRoot = companyDocClean.substring(0, 8);
 
-    if (uniqueRoots.includes(companyRoot)) {
-      return company;
-    }
+      // Check if this root exists anywhere in the numeric text stream of the document
+      if (textNumeric.includes(companyRoot)) {
+          return company;
+      }
   }
 
-  // Fallback por nome
-  const textNorm = removeAccents(text);
-
+  // --- STRATEGY: NAME MATCH (Fallback) ---
   for (const company of companies) {
-    const nameNorm = removeAccents(company.name);
-    if (nameNorm.length > 4 && textNorm.includes(nameNorm)) {
-      return company;
+    const nameNoAccents = removeAccents(company.name);
+    // Strict name check: must be longer than 4 chars to avoid matching short words
+    if (nameNoAccents.length > 4 && textNormalized.includes(nameNoAccents)) {
+        return company;
     }
   }
 
