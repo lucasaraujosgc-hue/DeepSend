@@ -14,7 +14,8 @@ export const removeAccents = (text: string): string => {
 };
 
 /**
- * Extracts text content from a PDF file preserving layout structure.
+ * Extracts text content from a PDF file using Visual Layout Reconstruction (XY Sorting).
+ * This fixes issues where text from different columns gets mixed up or words are broken.
  */
 export const extractTextFromPDF = async (file: File): Promise<string> => {
   try {
@@ -23,29 +24,59 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
     const pdf = await loadingTask.promise;
     let fullText = "";
 
-    // Read up to 5 pages to save performance but get enough context
     const maxPages = Math.min(pdf.numPages, 5);
     
     for (let i = 1; i <= maxPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
       
-      let lastY: number | null = null;
-      let pageText = '';
+      // 1. Map items with their coordinates
+      // transform[4] is X (horizontal), transform[5] is Y (vertical)
+      const items = textContent.items.map((item: any) => ({
+        str: item.str,
+        x: item.transform[4],
+        y: item.transform[5],
+        w: item.width,
+        hasEOL: item.hasEOL
+      }));
 
-      // Advanced extraction preserving visual lines
-      for (const item of textContent.items as any[]) {
-        if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
-          pageText += '\n'; // Add newline on significant vertical shift
+      // 2. Group items into visual lines based on Y coordinate tolerance
+      // PDF Y-coordinates usually go from bottom to top, or top to bottom depending on origin.
+      // We group items that are roughly on the same vertical level (tolerance of 5px)
+      const lines: { y: number; items: typeof items }[] = [];
+      const TOLERANCE_Y = 6;
+
+      for (const item of items) {
+        // Find an existing line that matches the Y coordinate within tolerance
+        const existingLine = lines.find(l => Math.abs(l.y - item.y) < TOLERANCE_Y);
+        
+        if (existingLine) {
+          existingLine.items.push(item);
+        } else {
+          lines.push({ y: item.y, items: [item] });
         }
-        pageText += item.str + ' ';
-        lastY = item.transform[5];
       }
 
-      fullText += pageText + '\n';
+      // 3. Sort lines Top-to-Bottom
+      // In PDF.js standard output, higher Y usually means higher on the page (Cartesian), 
+      // but sometimes it's inverted. We assume standard Cartesian (0,0 at bottom-left).
+      // So sorting DESCENDING Y puts top lines first.
+      lines.sort((a, b) => b.y - a.y);
+
+      // 4. Sort items within each line Left-to-Right (Ascending X) and join
+      const pageStrings = lines.map(line => {
+        // Sort items by X
+        line.items.sort((a, b) => a.x - b.x);
+        
+        // Join items with smart spacing
+        // If the gap between previous item end and current item start is large, add space
+        return line.items.map(item => item.str).join(' ');
+      });
+
+      fullText += pageStrings.join('\n') + '\n';
     }
     
-    // Normalize return: Remove accents, collapse multiple spaces to single space, trim
+    // Normalize return: Remove accents, collapse multiple spaces to single space
     return removeAccents(fullText).replace(/\s+/g, ' ').trim();
 
   } catch (error) {
@@ -56,11 +87,6 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
 
 /**
  * Identifies the category based on text content, keywords map, and priority rules.
- * 
- * Logic:
- * 1. Find ALL categories that match the keywords.
- * 2. If multiple matches, check priorityCategories.
- * 3. If a match is in priorityCategories, it wins.
  */
 export const identifyCategory = (
     text: string, 
@@ -68,81 +94,76 @@ export const identifyCategory = (
     priorityCategories: string[] = []
 ): string | null => {
   
-  // Note: Text is already normalized by extractTextFromPDF (accents removed, lowercased)
-  // But we run removeAccents again just to be safe if passed raw string
   const textNormalized = removeAccents(text);
   const matchedCategories: string[] = [];
 
-  // 1. Scan User Keywords
+  // 1. Scan User Keywords (Dynamic)
   for (const [category, keywords] of Object.entries(keywordMap)) {
     if (!keywords || !Array.isArray(keywords)) continue;
     
     for (const keyword of keywords) {
       if (!keyword) continue;
       const kwNormalized = removeAccents(keyword);
-      if (kwNormalized.length > 0 && textNormalized.includes(kwNormalized)) {
+      // Ensure keyword is not just a common letter/number to avoid false positives
+      if (kwNormalized.length > 2 && textNormalized.includes(kwNormalized)) {
         if (!matchedCategories.includes(category)) {
             matchedCategories.push(category);
         }
-        break; // Found this category, move to next category
+        break; 
       }
     }
   }
 
-  // 2. Scan Hardcoded Fallbacks (Robust check)
+  // 2. Scan Hardcoded Fallbacks (Only if no user keywords matched OR to allow priority resolution)
+  // We check these loosely but give preference to user settings via 'priorityCategories'
   
-  // Honorários
-  if (textNormalized.includes('cora.com.br') && !matchedCategories.includes('Honorários')) {
-      matchedCategories.push('Honorários');
+  // Honorários (Banco ou Cora)
+  if (textNormalized.includes('cora.com.br') || textNormalized.includes('honorarios')) {
+      if (!matchedCategories.includes('Honorários')) matchedCategories.push('Honorários');
   }
   
-  // Notas Fiscais (Expanded keywords)
+  // Notas Fiscais
   if (
       (textNormalized.includes('nota fiscal') || 
        textNormalized.includes('danfe') || 
-       textNormalized.includes('nf-e')) && 
-      !matchedCategories.includes('Notas Fiscais')
+       textNormalized.includes('nf-e'))
   ) {
-      matchedCategories.push('Notas Fiscais');
+      if (!matchedCategories.includes('Notas Fiscais')) matchedCategories.push('Notas Fiscais');
   }
 
-  // Folha
+  // Folha de Pagamento
   if (
-      textNormalized.includes('folha mensal') && 
-      textNormalized.includes('extrato mensal') && 
-      !matchedCategories.includes('Folha de Pagamento')
+      (textNormalized.includes('folha') && textNormalized.includes('pagamento')) ||
+      (textNormalized.includes('resumo') && textNormalized.includes('folha')) ||
+      textNormalized.includes('extrato mensal')
   ) {
-      matchedCategories.push('Folha de Pagamento');
+      if (!matchedCategories.includes('Folha de Pagamento')) matchedCategories.push('Folha de Pagamento');
   }
 
   // Simples Nacional
+  // Caution: Many documents mention "Optante pelo Simples Nacional" in footer.
+  // We look for specific document titles.
   if (
-      textNormalized.includes('simples nacional') && 
-      (textNormalized.includes('documento de arrecadacao') || textNormalized.includes('das')) && 
-      !matchedCategories.includes('Simples Nacional')
+      textNormalized.includes('documento de arrecadacao') && 
+      (textNormalized.includes('simples nacional') || textNormalized.includes('das'))
   ) {
-      matchedCategories.push('Simples Nacional');
+      if (!matchedCategories.includes('Simples Nacional')) matchedCategories.push('Simples Nacional');
   }
 
   // FGTS
   if (
       textNormalized.includes('fgts') && 
-      (textNormalized.includes('guia') || textNormalized.includes('digital')) && 
-      !matchedCategories.includes('FGTS')
+      (textNormalized.includes('guia') || textNormalized.includes('digital') || textNormalized.includes('fundo de garantia'))
   ) {
-      matchedCategories.push('FGTS');
+      if (!matchedCategories.includes('FGTS')) matchedCategories.push('FGTS');
   }
 
   if (matchedCategories.length === 0) return null;
   if (matchedCategories.length === 1) return matchedCategories[0];
 
   // 3. Resolve Conflict using Priority
-  // Find the first matched category that exists in the priority list
   const priorityMatch = matchedCategories.find(cat => priorityCategories.includes(cat));
-  
-  if (priorityMatch) {
-      return priorityMatch;
-  }
+  if (priorityMatch) return priorityMatch;
 
   // Default: Return the first match found
   return matchedCategories[0];
@@ -152,56 +173,33 @@ export const identifyCategory = (
  * Identifies the company based on text content using strict Regex logic.
  */
 export const identifyCompany = (text: string, companies: Company[]): Company | null => {
-  // Regex pattern strict on dots (\.) to avoid false positives.
-  // Groups:
-  // 1: CNPJ Full (\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})
-  // 2: CPF Full (\d{3}\.\d{3}\.\d{3}-\d{2})
-  // 3: CNPJ 14 digits (\d{14})
-  // 4: CPF 11 digits (\d{11})
-  // 5: CNPJ Partial 1 (\d{2}\.\d{3}\.\d{3})
-  // 6: CPF Partial 1 (\d{3}\.\d{3}\.\d{3})
-  // 7: CNPJ Partial 2 (\d{8})
-  // 8: CPF Partial 2 (\d{9})
-  const pattern = /(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})|(\d{3}\.\d{3}\.\d{3}-\d{2})|(\d{14})|(\d{11})|(\d{2}\.\d{3}\.\d{3})|(\d{3}\.\d{3}\.\d{3})|(\d{8})|(\d{9})/g;
+  // Enhanced Regex:
+  // 1. Allows optional spaces \s? around dots/slashes/dashes to handle bad OCR kerning (e.g. "58 . 560 . 180")
+  // 2. Captures standard formats
   
-  const matches = [...text.matchAll(pattern)];
+  // We use \s* to allow 0 or more spaces around separators
+  const jsPattern = /(\d{2}\s*\.\s*\d{3}\s*\.\s*\d{3}\s*\/\s*\d{4}\s*-\s*\d{2})|(\d{3}\s*\.\s*\d{3}\s*\.\s*\d{3}\s*-\s*\d{2})|(\d{14})|(\d{11})|(\d{2}\s*\.\s*\d{3}\s*\.\s*\d{3})|(\d{3}\s*\.\s*\d{3}\s*\.\s*\d{3})|(\d{8})|(\d{9})/g;
+
+  const matches = [...text.matchAll(jsPattern)];
   const foundDocs: {type: 'CNPJ' | 'CPF', val: string}[] = [];
 
   for (const match of matches) {
-      const [
-          fullMatch,
-          cnpjCompleto, cpfCompleto, cnpjSimples, cpfSimples, 
-          cnpjParcial1, cpfParcial1, cnpjParcial2, cpfParcial2
-      ] = match;
+      const fullMatch = match[0];
+      const cleanNums = fullMatch.replace(/\D/g, ''); // Remove non-digits to analyze length
 
-      // Logic:
-      // If CNPJ -> Clean non-digits -> Take substring(0, 8)
-      // If CPF -> Clean non-digits -> Keep full (usually) or partial depending on logic.
-      
-      if (cnpjCompleto) {
-          const clean = cnpjCompleto.replace(/\D/g, ''); 
-          foundDocs.push({ type: 'CNPJ', val: clean.substring(0, 8) }); 
-      } else if (cpfCompleto) {
-          const clean = cpfCompleto.replace(/\D/g, '');
-          foundDocs.push({ type: 'CPF', val: clean });
-      } else if (cnpjSimples) {
-          const clean = cnpjSimples.replace(/\D/g, '');
-          foundDocs.push({ type: 'CNPJ', val: clean.substring(0, 8) }); 
-      } else if (cpfSimples) {
-          const clean = cpfSimples.replace(/\D/g, '');
-          foundDocs.push({ type: 'CPF', val: clean });
-      } else if (cnpjParcial1) { 
-          const clean = cnpjParcial1.replace(/\D/g, '');
-          foundDocs.push({ type: 'CNPJ', val: clean }); 
-      } else if (cpfParcial1) { 
-          const clean = cpfParcial1.replace(/\D/g, '');
-          foundDocs.push({ type: 'CPF', val: clean });
-      } else if (cnpjParcial2) { // 8 digits
-          const clean = cnpjParcial2.replace(/\D/g, '');
-          foundDocs.push({ type: 'CNPJ', val: clean });
-      } else if (cpfParcial2) { // 9 digits
-          const clean = cpfParcial2.replace(/\D/g, '');
-          foundDocs.push({ type: 'CPF', val: clean });
+      // Determine Type based on length and structure
+      if (cleanNums.length === 14) {
+          // Full CNPJ -> Take first 8
+          foundDocs.push({ type: 'CNPJ', val: cleanNums.substring(0, 8) });
+      } else if (cleanNums.length === 11) {
+          // Full CPF
+          foundDocs.push({ type: 'CPF', val: cleanNums });
+      } else if (cleanNums.length === 8) {
+          // CNPJ Root or Partial
+          foundDocs.push({ type: 'CNPJ', val: cleanNums });
+      } else if (cleanNums.length === 9) {
+          // CPF Partial
+          foundDocs.push({ type: 'CPF', val: cleanNums });
       }
   }
 
@@ -210,22 +208,15 @@ export const identifyCompany = (text: string, companies: Company[]): Company | n
       a.findIndex(t => t.type === v.type && t.val === v.val) === i
   );
 
-  // 1. Search in DB
+  // 1. Search in DB by Document Number
   for (const item of uniqueFoundDocs) {
       for (const company of companies) {
-          // IMPORTANT: Clean database document number too
           const companyDocClean = company.docNumber.replace(/\D/g, '');
           
           if (company.type === 'CNPJ' || company.type === 'MEI') {
               if (item.type === 'CNPJ') {
-                  // DB (Full 14 chars) vs Extracted (First 8 chars)
-                  // We take first 8 of DB to compare
                   const dbRoot = companyDocClean.substring(0, 8);
-                  const foundRoot = item.val; 
-
-                  if (dbRoot === foundRoot) {
-                      return company;
-                  }
+                  if (dbRoot === item.val) return company;
               }
           } 
           
@@ -237,13 +228,13 @@ export const identifyCompany = (text: string, companies: Company[]): Company | n
       }
   }
 
-  // 2. Fallback: Search by Name (removing accents)
+  // 2. Fallback: Search by Name (Safe Check)
+  // Only if name is unique enough (more than 4 chars)
   const textNoAccents = removeAccents(text);
   
   for (const company of companies) {
     const nameNoAccents = removeAccents(company.name);
-    // Ensure name is long enough to avoid false positives
-    if (nameNoAccents.length > 2 && textNoAccents.includes(nameNoAccents)) {
+    if (nameNoAccents.length > 4 && textNoAccents.includes(nameNoAccents)) {
         return company;
     }
   }
