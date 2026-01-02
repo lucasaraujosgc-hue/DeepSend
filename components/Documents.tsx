@@ -153,8 +153,8 @@ const Documents: React.FC<DocumentsProps> = ({
           if (processingCategoryFilter) {
               detectedCategory = processingCategoryFilter;
           } else {
-              // Pass userSettings keywords to identifier
-              detectedCategory = identifyCategory(textContent, userSettings.categoryKeywords) || '';
+              // Pass userSettings keywords to identifier, INCLUDING PRIORITY
+              detectedCategory = identifyCategory(textContent, userSettings.categoryKeywords, userSettings.priorityCategories) || '';
           }
 
           tempFiles.push({
@@ -221,7 +221,7 @@ const Documents: React.FC<DocumentsProps> = ({
             if (processingCategoryFilter) {
                 detectedCategory = processingCategoryFilter;
             } else {
-                detectedCategory = identifyCategory(textContent, userSettings.categoryKeywords) || '';
+                detectedCategory = identifyCategory(textContent, userSettings.categoryKeywords, userSettings.priorityCategories) || '';
             }
 
             tempFiles.push({

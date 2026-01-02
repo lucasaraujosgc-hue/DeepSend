@@ -85,5 +85,6 @@ export interface UserSettings {
   whatsappTemplate: string;
   visibleDocumentCategories: string[];
   categoryKeywords: Record<string, string[]>;
+  priorityCategories: string[]; // New field for tie-breaking
   categoryRules: Record<string, CategoryRule>;
 }

@@ -44,6 +44,7 @@ Lucas Araújo`,
     'Notas Fiscais': ['nota fiscal'],
     'Honorários': ['um banco', 'cora.com.br']
   },
+  priorityCategories: [], // Default empty
   categoryRules: {
     'Simples Nacional': { day: 20, rule: 'postergado' },
     'FGTS': { day: 7, rule: 'antecipado' },

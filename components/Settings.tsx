@@ -1,5 +1,6 @@
+
 import React, { useState } from 'react';
-import { Save, User, Mail, MessageCircle, FileText, Check, LayoutTemplate, Link as LinkIcon, Plus, Trash, Clock, CalendarDays } from 'lucide-react';
+import { Save, User, Mail, MessageCircle, FileText, Check, LayoutTemplate, Link as LinkIcon, Plus, Trash, Clock, CalendarDays, Star } from 'lucide-react';
 import { UserSettings, CategoryRule } from '../types';
 import { DOCUMENT_CATEGORIES } from '../constants';
 
@@ -30,6 +31,17 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
         return { ...prev, visibleDocumentCategories: [...current, category] };
       }
     });
+  };
+
+  const togglePriority = (category: string) => {
+      setFormData(prev => {
+          const currentPriorities = prev.priorityCategories || [];
+          if (currentPriorities.includes(category)) {
+              return { ...prev, priorityCategories: currentPriorities.filter(c => c !== category) };
+          } else {
+              return { ...prev, priorityCategories: [...currentPriorities, category] };
+          }
+      });
   };
 
   const addKeyword = () => {
@@ -111,7 +123,7 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
             className={`px-6 py-4 font-medium text-sm flex items-center gap-2 transition-colors border-b-2 whitespace-nowrap
               ${activeTab === 'bindings' ? 'border-blue-500 text-blue-600 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
           >
-            <LinkIcon className="w-4 h-4" /> Vinculações
+            <LinkIcon className="w-4 h-4" /> Vinculações & Prioridades
           </button>
           <button
             onClick={() => setActiveTab('due_dates')}
@@ -210,8 +222,11 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
           {activeTab === 'bindings' && (
             <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 space-y-8">
                <div className="mb-6">
-                 <h3 className="font-semibold text-gray-800">Palavras-chave de Identificação</h3>
-                 <p className="text-sm text-gray-500">Configure as palavras-chave usadas para identificar automaticamente a categoria dos arquivos.</p>
+                 <h3 className="font-semibold text-gray-800">Palavras-chave e Prioridades</h3>
+                 <p className="text-sm text-gray-500">
+                     Configure as palavras-chave para identificar categorias. 
+                     Use a <strong>Estrela</strong> para marcar categorias como prioritárias em caso de conflito.
+                 </p>
                </div>
 
                {/* Add New Keyword */}
@@ -248,11 +263,19 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                  {DOCUMENT_CATEGORIES.map(category => {
                    const keywords = formData.categoryKeywords[category] || [];
+                   const isPriority = (formData.priorityCategories || []).includes(category);
 
                    return (
-                     <div key={category} className="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-sm">
+                     <div key={category} className={`border rounded-lg overflow-hidden bg-white shadow-sm transition-all ${isPriority ? 'border-yellow-400 ring-1 ring-yellow-400' : 'border-gray-200'}`}>
                         <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 font-bold text-gray-700 flex justify-between items-center">
                            <span>{category}</span>
+                           <button 
+                             onClick={() => togglePriority(category)}
+                             className={`p-1 rounded hover:bg-gray-200 transition-colors ${isPriority ? 'text-yellow-500' : 'text-gray-300'}`}
+                             title={isPriority ? "Remover Prioridade" : "Marcar como Prioridade"}
+                           >
+                               <Star className={`w-5 h-5 ${isPriority ? 'fill-yellow-500' : ''}`} />
+                           </button>
                         </div>
                         
                         <div className="p-4">

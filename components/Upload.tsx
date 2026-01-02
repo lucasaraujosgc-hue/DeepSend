@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Upload as UploadIcon, X, FileText, Calendar, AlertCircle, Loader2 } from 'lucide-react';
 import { DOCUMENT_CATEGORIES } from '../constants';
@@ -103,7 +104,8 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
         }
 
         let category = '';
-        const identified = identifyCategory(textContent, userSettings.categoryKeywords);
+        // Pass user settings priority
+        const identified = identifyCategory(textContent, userSettings.categoryKeywords, userSettings.priorityCategories);
         
         if (identified) {
             category = identified;
