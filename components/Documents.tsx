@@ -53,7 +53,7 @@ const Documents: React.FC<DocumentsProps> = ({
   const [processing, setProcessing] = useState(false);
   const [isUploadingConfirmed, setIsUploadingConfirmed] = useState(false);
   
-  // Processing Filters (Restored)
+  // Processing Filters
   const [processingCompanyId, setProcessingCompanyId] = useState<string>('');
   const [processingCategoryFilter, setProcessingCategoryFilter] = useState<string>('');
 
@@ -64,10 +64,6 @@ const Documents: React.FC<DocumentsProps> = ({
   const [matrixSearch, setMatrixSearch] = useState('');
   const [matrixStatusFilter, setMatrixStatusFilter] = useState<'all' | 'pending' | 'sent'>('all');
   const [matrixCategoryFilter, setMatrixCategoryFilter] = useState<string>('all');
-
-  // Filters for pre-processing logic (optional)
-  const [selectedCompanies, setSelectedCompanies] = useState<string[]>([]);
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -111,7 +107,7 @@ const Documents: React.FC<DocumentsProps> = ({
             setLocalPath(`${files.length} arquivos selecionados`);
         }
 
-        const zipFile = files.find(f => f.name.endsWith('.zip') || f.name.endsWith('.rar'));
+        const zipFile = files.find(f => f.name.toLowerCase().endsWith('.zip') || f.name.toLowerCase().endsWith('.rar'));
         
         if (zipFile) {
              if (files.length > 1) {
@@ -130,14 +126,15 @@ const Documents: React.FC<DocumentsProps> = ({
       const tempFiles: PreviewFile[] = [];
 
       for (const file of fileList) {
-          // Read content for identification
+          // Default: use filename
           let textContent = file.name;
           
-          // Only attempt PDF read if we are in "Automatic" mode or just need context
-          if (file.type === 'application/pdf') {
+          // Force PDF extraction if extension is .pdf (ignore mime type which can be flaky)
+          if (file.name.toLowerCase().endsWith('.pdf')) {
               try {
                 const extracted = await extractTextFromPDF(file);
-                if (extracted && extracted.length > 10) {
+                // Concatenate extracted text to filename to give detection maximum context
+                if (extracted && extracted.length > 5) {
                     textContent += " " + extracted;
                 }
               } catch(e) { console.warn("PDF Read error", e); }
@@ -195,13 +192,17 @@ const Documents: React.FC<DocumentsProps> = ({
             const fileName = entry.name;
             const simpleName = fileName.split('/').pop() || fileName;
             const blob = await entry.obj.async("blob");
-            const file = new File([blob], simpleName, { type: blob.type || 'application/pdf' });
+            
+            // Force type for PDF
+            const type = simpleName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : blob.type;
+            const file = new File([blob], simpleName, { type });
 
             let textContent = simpleName; 
+            
             if (simpleName.toLowerCase().endsWith('.pdf')) {
                  try {
                      const extracted = await extractTextFromPDF(file);
-                     if (extracted && extracted.length > 10) {
+                     if (extracted && extracted.length > 5) {
                          textContent += " " + extracted;
                      }
                  } catch(e) {}
