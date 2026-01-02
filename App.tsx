@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
@@ -125,6 +126,20 @@ const App: React.FC = () => {
       }));
   };
 
+  // Handle Delete Single Document
+  const handleDeleteDocument = (id: number) => {
+      if(window.confirm("Tem certeza que deseja remover este arquivo da lista de envio?")) {
+          setDocuments(prev => prev.filter(d => d.id !== id));
+      }
+  };
+
+  // Handle Clear All Pending Documents (for current view usually, but here clears all pending)
+  const handleClearPendingDocuments = (competenceFilter: string) => {
+      if(window.confirm(`Tem certeza que deseja excluir TODOS os arquivos pendentes da competência ${competenceFilter}?`)) {
+          setDocuments(prev => prev.filter(d => !(d.status === 'pending' && d.competence === competenceFilter)));
+      }
+  };
+
   const renderContent = () => {
     switch (activePage) {
       case 'dashboard':
@@ -153,6 +168,8 @@ const App: React.FC = () => {
                   onSendDocuments={handleSendDocuments}
                   onNavigateToDocuments={handleNavigateToDocuments}
                   userSettings={userSettings}
+                  onDeleteDocument={handleDeleteDocument}
+                  onClearPendingDocuments={handleClearPendingDocuments}
                />;
       case 'bulksend':
         return <BulkSend />;

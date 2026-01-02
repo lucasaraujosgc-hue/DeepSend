@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Send as SendIcon, Mail, MessageCircle, FileText, Trash, Clock, Check, Info, ArrowLeft, X, CheckSquare, Calendar, Loader2 } from 'lucide-react';
 import { Document, Company, UserSettings } from '../types';
@@ -8,9 +9,11 @@ interface SendProps {
   onSendDocuments: (ids: number[]) => void;
   onNavigateToDocuments: () => void;
   userSettings: UserSettings;
+  onDeleteDocument: (id: number) => void;
+  onClearPendingDocuments: (competence: string) => void;
 }
 
-const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDocuments, userSettings }) => {
+const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDocuments, userSettings, onDeleteDocument, onClearPendingDocuments }) => {
   const getCurrentCompetence = () => {
     const now = new Date();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -202,9 +205,17 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
                   {loadingCompanies && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
               </h4>
               {pendingDocs.length > 0 && (
-                  <button onClick={toggleSelectGlobal} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${isGlobalSelected ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
-                      <CheckSquare className="w-4 h-4" /> {isGlobalSelected ? 'Desmarcar Todos' : 'Selecionar Todos (Geral)'}
-                  </button>
+                  <div className="flex gap-2">
+                    <button 
+                        onClick={() => onClearPendingDocuments(competence)}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors bg-red-100 text-red-700 hover:bg-red-200"
+                    >
+                        <Trash className="w-4 h-4" /> Limpar Lista
+                    </button>
+                    <button onClick={toggleSelectGlobal} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${isGlobalSelected ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
+                        <CheckSquare className="w-4 h-4" /> {isGlobalSelected ? 'Desmarcar Todos' : 'Selecionar Todos (Geral)'}
+                    </button>
+                  </div>
               )}
           </div>
 
@@ -248,7 +259,15 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
                                               <td className="px-4 py-3"><span className="px-2 py-1 bg-gray-100 rounded text-xs text-gray-600 font-medium">{doc.category}</span></td>
                                               <td className="px-4 py-3 text-gray-600">{doc.dueDate || <span className="text-gray-400">Não informado</span>}</td>
                                               <td className="px-4 py-3 text-center"><span className="bg-yellow-100 text-yellow-700 px-2 py-1 rounded text-xs font-bold uppercase">Pendente</span></td>
-                                              <td className="px-4 py-3 text-center"><button className="text-red-500 hover:bg-red-50 p-1 rounded transition-colors"><Trash className="w-4 h-4" /></button></td>
+                                              <td className="px-4 py-3 text-center">
+                                                <button 
+                                                    onClick={() => onDeleteDocument(doc.id)}
+                                                    className="text-red-500 hover:bg-red-50 p-1 rounded transition-colors"
+                                                    title="Remover este arquivo"
+                                                >
+                                                    <Trash className="w-4 h-4" />
+                                                </button>
+                                              </td>
                                           </tr>
                                       ))}
                                   </tbody>
