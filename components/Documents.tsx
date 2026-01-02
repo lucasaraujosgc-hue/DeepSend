@@ -122,37 +122,40 @@ const Documents: React.FC<DocumentsProps> = ({
   };
 
   const prepareMultipleFiles = async (fileList: File[]) => {
+      // 1. Inicia o loading e BLOQUEIA o modal
       setProcessing(true);
+      setPreviewFiles([]);
+      
       const tempFiles: PreviewFile[] = [];
 
+      // 2. Processa cada arquivo (Await garante que só prossegue após terminar)
       for (const file of fileList) {
           let extractedText = "";
 
-          // 1. EXTRACT TEXT FIRST (If PDF)
+          // A. Extração de Texto do PDF (CRÍTICO: Acontece antes da identificação)
           if (file.name.toLowerCase().endsWith('.pdf')) {
               try {
-                // Ensure we extract the text before any identification logic
                 extractedText = await extractTextFromPDF(file);
               } catch(e) { 
                 console.warn("PDF Read error", e); 
               }
           }
 
-          // 2. IDENTIFY COMPANY (Strict Priority: Text -> Filename)
+          // B. Identificação da Empresa (Prioridade: Texto > Nome)
           let detectedCompanyId: number | null = null;
           
           if (processingCompanyId) {
-              // Manual filter override
+              // Override manual pelo select
               detectedCompanyId = Number(processingCompanyId);
           } else {
               let company = null;
               
-              // A. Try with PDF Content ONLY
+              // Tenta identificar pelo CONTEÚDO (Texto Extraído)
               if (extractedText && extractedText.length > 5) {
                    company = identifyCompany(extractedText, companies);
               }
 
-              // B. Fallback to Filename if Content failed
+              // Fallback: Tenta identificar pelo NOME DO ARQUIVO se falhou no conteúdo
               if (!company) {
                    company = identifyCompany(file.name, companies);
               }
@@ -160,13 +163,12 @@ const Documents: React.FC<DocumentsProps> = ({
               detectedCompanyId = company ? company.id : null;
           }
 
-          // 3. IDENTIFY CATEGORY
+          // C. Identificação da Categoria
           let detectedCategory = '';
           if (processingCategoryFilter) {
               detectedCategory = processingCategoryFilter;
           } else {
-              // For category, we CAN combine to increase hit rate (keywords might be in filename)
-              // But if you prefer strict:
+              // Concatena texto e nome para maximizar chances de achar keywords
               const textForCategory = (extractedText + " " + file.name).trim();
               detectedCategory = identifyCategory(textForCategory, userSettings.categoryKeywords, userSettings.priorityCategories) || '';
           }
@@ -182,14 +184,18 @@ const Documents: React.FC<DocumentsProps> = ({
           });
       }
 
+      // 3. Só agora, com tudo processado, atualiza o estado e abre o modal
       setPreviewFiles(tempFiles);
       setProcessing(false);
       setShowPreviewModal(true);
+      
       if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const prepareZipFile = async (zipFile: File) => {
       setProcessing(true);
+      setPreviewFiles([]);
+
       try {
         const zip = await JSZip.loadAsync(zipFile);
         const entries: {name: string, obj: any}[] = [];
@@ -213,7 +219,7 @@ const Documents: React.FC<DocumentsProps> = ({
 
             let extractedText = "";
 
-            // 1. EXTRACT TEXT FIRST
+            // A. Extração de Texto
             if (simpleName.toLowerCase().endsWith('.pdf')) {
                  try {
                      extractedText = await extractTextFromPDF(file);
@@ -222,19 +228,17 @@ const Documents: React.FC<DocumentsProps> = ({
                  }
             }
 
-            // 2. IDENTIFY COMPANY (Strict Priority)
+            // B. Identificação Empresa
             let detectedCompanyId: number | null = null;
             if (processingCompanyId) {
                 detectedCompanyId = Number(processingCompanyId);
             } else {
                 let company = null;
                 
-                // A. Try Content
                 if (extractedText && extractedText.length > 5) {
                     company = identifyCompany(extractedText, companies);
                 }
 
-                // B. Fallback to Filename
                 if (!company) {
                     company = identifyCompany(simpleName, companies);
                 }
@@ -242,7 +246,7 @@ const Documents: React.FC<DocumentsProps> = ({
                 detectedCompanyId = company ? company.id : null;
             }
 
-            // 3. IDENTIFY CATEGORY
+            // C. Identificação Categoria
             let detectedCategory = '';
             if (processingCategoryFilter) {
                 detectedCategory = processingCategoryFilter;

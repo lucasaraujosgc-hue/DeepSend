@@ -31,7 +31,6 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
       const textContent = await page.getTextContent();
       
       // 1. Map items with their coordinates
-      // transform[4] is X (horizontal), transform[5] is Y (vertical)
       const items = textContent.items.map((item: any) => ({
         str: item.str,
         x: item.transform[4],
@@ -41,15 +40,11 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
       }));
 
       // 2. Group items into visual lines based on Y coordinate tolerance
-      // PDF Y-coordinates usually go from bottom to top, or top to bottom depending on origin.
-      // We group items that are roughly on the same vertical level (tolerance of 5px)
       const lines: { y: number; items: typeof items }[] = [];
       const TOLERANCE_Y = 6;
 
       for (const item of items) {
-        // Find an existing line that matches the Y coordinate within tolerance
         const existingLine = lines.find(l => Math.abs(l.y - item.y) < TOLERANCE_Y);
-        
         if (existingLine) {
           existingLine.items.push(item);
         } else {
@@ -62,9 +57,7 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
 
       // 4. Sort items within each line Left-to-Right (Ascending X) and join
       const pageStrings = lines.map(line => {
-        // Sort items by X
         line.items.sort((a, b) => a.x - b.x);
-        // Join items with smart spacing
         return line.items.map(item => item.str).join(' ');
       });
 
@@ -99,7 +92,6 @@ export const identifyCategory = (
     for (const keyword of keywords) {
       if (!keyword) continue;
       const kwNormalized = removeAccents(keyword);
-      // Ensure keyword is not just a common letter/number to avoid false positives
       if (kwNormalized.length > 2 && textNormalized.includes(kwNormalized)) {
         if (!matchedCategories.includes(category)) {
             matchedCategories.push(category);
@@ -155,20 +147,22 @@ export const identifyCategory = (
 };
 
 /**
- * Identifies the company using strictly the ROOT (first 8 digits) of the CNPJ.
- * Normalizes both the input text and the DB records to digits only.
- * This ensures matches even if OCR misses dots, dashes or adds spaces.
+ * Identifies the company using REVERSE SEARCH strategy.
+ * Instead of trying to regex the PDF for a CNPJ format, we iterate through the DB companies
+ * and check if their CNPJ (stripped of punctuation) exists in the PDF text (also stripped).
  */
 export const identifyCompany = (text: string, companies: Company[]): Company | null => {
   if (!text) return null;
 
-  // 1. Clean the haystack (Input Text) -> Keep only digits
+  // 1. Create a "haystack" of just numbers from the text
+  // This handles cases where PDF has "12.345.678/0001-99" or "12345678000199" or even "12 345 678"
   const textNumeric = text.replace(/\D/g, ''); 
   
   // 2. Normalize text for name fallback
   const textNormalized = removeAccents(text);
 
-  // --- STRATEGY: ROOT MATCH (8 Digits) ---
+  // --- STRATEGY 1: ROOT MATCH (8 Digits) ---
+  // Most reliable. We check if the first 8 digits of any company CNPJ exist in the text.
   for (const company of companies) {
       // Clean DB Document
       const companyDocClean = company.docNumber.replace(/\D/g, '');
@@ -179,16 +173,17 @@ export const identifyCompany = (text: string, companies: Company[]): Company | n
       // Extract Root (first 8 digits)
       const companyRoot = companyDocClean.substring(0, 8);
 
-      // Check if this root exists anywhere in the numeric text stream of the document
+      // Check if this root exists anywhere in the numeric stream of the document
       if (textNumeric.includes(companyRoot)) {
           return company;
       }
   }
 
-  // --- STRATEGY: NAME MATCH (Fallback) ---
+  // --- STRATEGY 2: NAME MATCH (Fallback) ---
+  // Only used if CNPJ match fails.
   for (const company of companies) {
     const nameNoAccents = removeAccents(company.name);
-    // Strict name check: must be longer than 4 chars to avoid matching short words
+    // Strict name check: must be longer than 4 chars to avoid matching short common words
     if (nameNoAccents.length > 4 && textNormalized.includes(nameNoAccents)) {
         return company;
     }
