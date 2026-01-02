@@ -122,20 +122,18 @@ const Documents: React.FC<DocumentsProps> = ({
   };
 
   const prepareMultipleFiles = async (fileList: File[]) => {
-      // 1. Inicia o loading e BLOQUEIA o modal
       setProcessing(true);
       setPreviewFiles([]);
       
       const tempFiles: PreviewFile[] = [];
 
-      // 2. Processa cada arquivo (Await garante que só prossegue após terminar)
       for (const file of fileList) {
-          let extractedText = "";
+          let pdfText = "";
 
-          // A. Extração de Texto do PDF (CRÍTICO: Acontece antes da identificação)
+          // 1. Extração (Sem julgamento de valor)
           if (file.name.toLowerCase().endsWith('.pdf')) {
               try {
-                extractedText = await extractTextFromPDF(file);
+                pdfText = await extractTextFromPDF(file);
               } catch(e) { 
                 console.warn("PDF Read error", e); 
               }
@@ -143,42 +141,40 @@ const Documents: React.FC<DocumentsProps> = ({
 
           // LOG PARA DEBUG
           console.log('📄 Arquivo:', file.name);
-          console.log('🧾 Texto extraído (primeiros 300):', extractedText.substring(0, 300));
           
-          // NORMALIZAÇÃO PRÉVIA
-          const normalizedText = removeAccents(extractedText.toLowerCase());
+          // 2. NORMALIZAÇÃO UNIFICADA (Igual ao Python)
+          // Combina texto do PDF + Nome do arquivo para maximizar chances
+          const textForAnalysis = removeAccents((pdfText + " " + file.name).toLowerCase());
+          
+          console.log('🔍 Texto Analisado:', textForAnalysis.substring(0, 300));
 
-          // B. Identificação da Empresa (Prioridade: Texto > Nome)
+          // 3. Identificação da Empresa
           let detectedCompanyId: number | null = null;
           
           if (processingCompanyId) {
-              // Override manual pelo select
               detectedCompanyId = Number(processingCompanyId);
           } else {
-              let company = null;
-              
-              // Tenta identificar pelo CONTEÚDO (Texto Normalizado)
-              if (normalizedText && normalizedText.length > 5) {
-                   company = identifyCompany(normalizedText, companies);
+              // Identifica usando o texto "rico" normalizado
+              const company = identifyCompany(textForAnalysis, companies);
+              if (company) {
+                  detectedCompanyId = company.id;
+              } else {
+                  console.warn(`⚠️ Empresa não identificada: ${file.name}`);
               }
-
-              // Fallback: Tenta identificar pelo NOME DO ARQUIVO se falhou no conteúdo
-              if (!company) {
-                   const normalizedFileName = removeAccents(file.name.toLowerCase());
-                   company = identifyCompany(normalizedFileName, companies);
-              }
-
-              detectedCompanyId = company ? company.id : null;
           }
 
-          // C. Identificação da Categoria
+          // 4. Identificação da Categoria
           let detectedCategory = '';
           if (processingCategoryFilter) {
               detectedCategory = processingCategoryFilter;
           } else {
-              // Concatena texto e nome para maximizar chances de achar keywords
-              const textForCategory = (normalizedText + " " + removeAccents(file.name.toLowerCase())).trim();
-              detectedCategory = identifyCategory(textForCategory, userSettings.categoryKeywords, userSettings.priorityCategories) || '';
+              const category = identifyCategory(textForAnalysis, userSettings.categoryKeywords, userSettings.priorityCategories);
+              // Fallback para 'Outros' se não encontrar, em vez de deixar vazio ou ignorar
+              detectedCategory = category ?? 'Outros';
+              
+              if (!category) {
+                  console.warn(`⚠️ Categoria não identificada (definida como Outros): ${file.name}`);
+              }
           }
 
           tempFiles.push({
@@ -192,7 +188,6 @@ const Documents: React.FC<DocumentsProps> = ({
           });
       }
 
-      // 3. Só agora, com tudo processado, atualiza o estado e abre o modal
       setPreviewFiles(tempFiles);
       setProcessing(false);
       setShowPreviewModal(true);
@@ -221,54 +216,42 @@ const Documents: React.FC<DocumentsProps> = ({
             const simpleName = fileName.split('/').pop() || fileName;
             const blob = await entry.obj.async("blob");
             
-            // Force type for PDF
             const type = simpleName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : blob.type;
             const file = new File([blob], simpleName, { type });
 
-            let extractedText = "";
+            let pdfText = "";
 
-            // A. Extração de Texto
             if (simpleName.toLowerCase().endsWith('.pdf')) {
                  try {
-                     extractedText = await extractTextFromPDF(file);
+                     pdfText = await extractTextFromPDF(file);
                  } catch(e) {
                      console.warn("Zip PDF Read error", e);
                  }
             }
 
-            // LOG PARA DEBUG
             console.log('📄 Arquivo (ZIP):', simpleName);
-            console.log('🧾 Texto extraído (primeiros 300):', extractedText.substring(0, 300));
 
-            // NORMALIZAÇÃO PRÉVIA
-            const normalizedText = removeAccents(extractedText.toLowerCase());
+            // 2. NORMALIZAÇÃO UNIFICADA
+            const textForAnalysis = removeAccents((pdfText + " " + simpleName).toLowerCase());
 
-            // B. Identificação Empresa
+            console.log('🔍 Texto Analisado:', textForAnalysis.substring(0, 300));
+
+            // 3. Identificação Empresa
             let detectedCompanyId: number | null = null;
             if (processingCompanyId) {
                 detectedCompanyId = Number(processingCompanyId);
             } else {
-                let company = null;
-                
-                if (normalizedText && normalizedText.length > 5) {
-                    company = identifyCompany(normalizedText, companies);
-                }
-
-                if (!company) {
-                    const normalizedFileName = removeAccents(simpleName.toLowerCase());
-                    company = identifyCompany(normalizedFileName, companies);
-                }
-
-                detectedCompanyId = company ? company.id : null;
+                const company = identifyCompany(textForAnalysis, companies);
+                if (company) detectedCompanyId = company.id;
             }
 
-            // C. Identificação Categoria
+            // 4. Identificação Categoria
             let detectedCategory = '';
             if (processingCategoryFilter) {
                 detectedCategory = processingCategoryFilter;
             } else {
-                const textForCategory = (normalizedText + " " + removeAccents(simpleName.toLowerCase())).trim();
-                detectedCategory = identifyCategory(textForCategory, userSettings.categoryKeywords, userSettings.priorityCategories) || '';
+                const category = identifyCategory(textForAnalysis, userSettings.categoryKeywords, userSettings.priorityCategories);
+                detectedCategory = category ?? 'Outros';
             }
 
             tempFiles.push({
@@ -310,7 +293,10 @@ const Documents: React.FC<DocumentsProps> = ({
       let processedCount = 0;
 
       for (const item of previewFiles) {
-          if (!item.detectedCompanyId || !item.detectedCategory) continue;
+          // Permite upload mesmo sem categoria (vai como Outros), mas exige Empresa
+          if (!item.detectedCompanyId) continue;
+
+          const category = item.detectedCategory || 'Outros';
 
           try {
               const uploadRes = await api.uploadFile(item.file);
@@ -318,8 +304,8 @@ const Documents: React.FC<DocumentsProps> = ({
               const uploadedFile: UploadedFile = {
                   name: item.fileName,
                   size: item.size,
-                  category: item.detectedCategory,
-                  dueDate: calculatedDates[item.detectedCategory] || '',
+                  category: category,
+                  dueDate: calculatedDates[category] || '',
                   file: item.file,
                   serverFilename: uploadRes.filename
               };
@@ -563,7 +549,7 @@ const Documents: React.FC<DocumentsProps> = ({
                     <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
                     <div>
                         Verifique se a Empresa e a Categoria foram identificadas corretamente. 
-                        Arquivos sem Empresa ou Categoria <strong>não serão processados</strong>.
+                        Arquivos sem Empresa <strong>não serão processados</strong>.
                     </div>
                 </div>
 
@@ -599,11 +585,12 @@ const Documents: React.FC<DocumentsProps> = ({
                                     <td className="px-4 py-3">
                                         <select 
                                             className={`w-full border rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-blue-500
-                                                ${!item.detectedCategory ? 'border-red-300 bg-red-50' : 'border-gray-300'}`}
+                                                ${!item.detectedCategory ? 'border-yellow-300 bg-yellow-50' : 'border-gray-300'}`}
                                             value={item.detectedCategory}
                                             onChange={(e) => updatePreview(item.id, 'detectedCategory', e.target.value)}
                                         >
-                                            <option value="">-- Selecione --</option>
+                                            {/* Se estiver vazio, exibe como "Outros" implícito ou selecionável */}
+                                            <option value="Outros">Outros</option>
                                             {DOCUMENT_CATEGORIES.map(cat => (
                                                 <option key={cat} value={cat}>{cat}</option>
                                             ))}

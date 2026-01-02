@@ -5,7 +5,7 @@ import { DOCUMENT_CATEGORIES } from '../constants';
 import { calcularTodosVencimentos } from '../utils/dateHelpers';
 import { UploadedFile, Company, UserSettings } from '../types';
 import { api } from '../services/api';
-import { identifyCategory, extractTextFromPDF } from '../utils/documentProcessor'; 
+import { identifyCategory, extractTextFromPDF, removeAccents } from '../utils/documentProcessor'; 
 import { DEFAULT_USER_SETTINGS } from '../constants';
 
 interface UploadProps {
@@ -89,31 +89,26 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
     const newFiles: UploadedFile[] = [];
 
     for (const file of fileList) {
-        let textContent = file.name; // Padrão: nome do arquivo
+        let pdfText = "";
 
         // Se for PDF, tenta extrair o texto
         if (file.type === 'application/pdf') {
             try {
-                const extracted = await extractTextFromPDF(file);
-                if (extracted && extracted.length > 10) {
-                    textContent += " " + extracted; // Concatena para ter mais contexto
-                }
+                pdfText = await extractTextFromPDF(file);
             } catch (err) {
                 console.warn(`Erro lendo PDF ${file.name}`, err);
             }
         }
 
-        let category = '';
-        // Pass user settings priority
-        const identified = identifyCategory(textContent, userSettings.categoryKeywords, userSettings.priorityCategories);
+        // NORMALIZAÇÃO UNIFICADA
+        const textForAnalysis = removeAccents((pdfText + " " + file.name).toLowerCase());
         
-        if (identified) {
-            category = identified;
-        } else {
-            // Fallback: Primeira categoria
-            category = DOCUMENT_CATEGORIES[0];
-        }
-
+        // Pass user settings priority
+        // Assume normalized text input now
+        const identified = identifyCategory(textForAnalysis, userSettings.categoryKeywords, userSettings.priorityCategories);
+        
+        let category = identified ?? 'Outros';
+        
         let dueDate = '';
         if (category && calculatedDates[category]) {
             dueDate = calculatedDates[category];

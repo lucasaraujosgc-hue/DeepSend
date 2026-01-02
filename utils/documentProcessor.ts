@@ -14,7 +14,8 @@ export const removeAccents = (text: string): string => {
 };
 
 /**
- * Extracts text content from a PDF file using a robust strategy with logging.
+ * Extracts text content from a PDF file without judging content length.
+ * Returns whatever text is found, even if scrambled or short.
  */
 export const extractTextFromPDF = async (file: File): Promise<string> => {
   try {
@@ -40,13 +41,9 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
       fullText += pageText + ' ';
     }
 
-    const cleanedText = fullText.trim();
-
-    if (cleanedText.length < 20) {
-      console.warn(`⚠️ PDF sem texto detectável ou muito curto: ${file.name}`);
-    }
-
-    return cleanedText;
+    // Retorna o que achou, sem validar tamanho. 
+    // O Python fazia exatamente isso (extract_text() + " ").
+    return fullText.trim(); 
   } catch (error) {
     console.error(`❌ Erro ao extrair texto do PDF: ${file.name}`, error);
     return '';
@@ -55,14 +52,15 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
 
 /**
  * Identifies the category based on text content, keywords map, and priority rules.
+ * Expects normalized text input.
  */
 export const identifyCategory = (
-    text: string, 
+    textNormalized: string, 
     keywordMap: Record<string, string[]>, 
     priorityCategories: string[] = []
 ): string | null => {
   
-  const textNormalized = removeAccents(text);
+  // Text is assumed to be already normalized by caller for performance/consistency
   const matchedCategories: string[] = [];
 
   // 1. Scan User Keywords (Dynamic)
@@ -71,6 +69,7 @@ export const identifyCategory = (
     
     for (const keyword of keywords) {
       if (!keyword) continue;
+      // Keywords should be normalized in settings, but safety check here
       const kwNormalized = removeAccents(keyword);
       if (kwNormalized.length > 2 && textNormalized.includes(kwNormalized)) {
         if (!matchedCategories.includes(category)) {
@@ -128,15 +127,13 @@ export const identifyCategory = (
 
 /**
  * Identifies the company using STRICT version provided.
- * Handles fragmented numbers and regex splits.
+ * Expects normalized text input.
  */
-export const identifyCompany = (text: string, companies: Company[]): Company | null => {
-  if (!text) return null;
-
-  const textNormalized = removeAccents(text);
+export const identifyCompany = (textNormalized: string, companies: Company[]): Company | null => {
+  if (!textNormalized) return null;
 
   // 1. Extrai TODOS os blocos numéricos possíveis (mesmo quebrados)
-  const numericGroups = text
+  const numericGroups = textNormalized
     .replace(/[^\d]/g, ' ')
     .split(' ')
     .filter(n => n.length >= 4);
@@ -161,7 +158,7 @@ export const identifyCompany = (text: string, companies: Company[]): Company | n
     }
   }
 
-  // 2. Fallback por nome (seguro)
+  // 2. Fallback por nome (seguro) - textNormalized já contém o nome do arquivo concatenado se o caller fez certo
   for (const company of companies) {
     const nameNoAccents = removeAccents(company.name);
     if (nameNoAccents.length > 4 && textNormalized.includes(nameNoAccents)) {
