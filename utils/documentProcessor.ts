@@ -147,45 +147,45 @@ export const identifyCategory = (
 };
 
 /**
- * Identifies the company using REVERSE SEARCH strategy.
- * Instead of trying to regex the PDF for a CNPJ format, we iterate through the DB companies
- * and check if their CNPJ (stripped of punctuation) exists in the PDF text (also stripped).
+ * Identifies the company using STRICT version provided.
+ * Handles fragmented numbers and regex splits.
  */
 export const identifyCompany = (text: string, companies: Company[]): Company | null => {
   if (!text) return null;
 
-  // 1. Create a "haystack" of just numbers from the text
-  // This handles cases where PDF has "12.345.678/0001-99" or "12345678000199" or even "12 345 678"
-  const textNumeric = text.replace(/\D/g, ''); 
-  
-  // 2. Normalize text for name fallback
   const textNormalized = removeAccents(text);
 
-  // --- STRATEGY 1: ROOT MATCH (8 Digits) ---
-  // Most reliable. We check if the first 8 digits of any company CNPJ exist in the text.
+  // 1. Extrai TODOS os blocos numéricos possíveis (mesmo quebrados)
+  const numericGroups = text
+    .replace(/[^\d]/g, ' ')
+    .split(' ')
+    .filter(n => n.length >= 4);
+
+  // Junta tudo também (fallback)
+  const fullNumeric = numericGroups.join('');
+
   for (const company of companies) {
-      // Clean DB Document
-      const companyDocClean = company.docNumber.replace(/\D/g, '');
-      
-      // We need at least 8 digits to compare a root safely
-      if (companyDocClean.length < 8) continue;
+    const companyDocClean = company.docNumber.replace(/\D/g, '');
+    if (companyDocClean.length < 8) continue;
 
-      // Extract Root (first 8 digits)
-      const companyRoot = companyDocClean.substring(0, 8);
+    const root = companyDocClean.substring(0, 8);
 
-      // Check if this root exists anywhere in the numeric stream of the document
-      if (textNumeric.includes(companyRoot)) {
-          return company;
+    // ✔ Match direto
+    if (fullNumeric.includes(root)) return company;
+
+    // ✔ Match fragmentado (PDF quebrado)
+    for (const group of numericGroups) {
+      if (group.includes(root) || root.includes(group)) {
+        return company;
       }
+    }
   }
 
-  // --- STRATEGY 2: NAME MATCH (Fallback) ---
-  // Only used if CNPJ match fails.
+  // 2. Fallback por nome (seguro)
   for (const company of companies) {
     const nameNoAccents = removeAccents(company.name);
-    // Strict name check: must be longer than 4 chars to avoid matching short common words
     if (nameNoAccents.length > 4 && textNormalized.includes(nameNoAccents)) {
-        return company;
+      return company;
     }
   }
 
