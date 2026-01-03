@@ -37,6 +37,11 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
       const textContent = await page.getTextContent();
 
       const pageText = textContent.items
+        .sort((a: any, b: any) => {
+          const yDiff = b.transform[5] - a.transform[5];
+          if (Math.abs(yDiff) > 2) return yDiff;
+          return a.transform[4] - b.transform[4];
+        })
         .map((item: any) => item.str)
         .join(' ') // Join with space to prevent glued words
         .trim();
@@ -96,7 +101,9 @@ export const identifyCompany = (textNormalized: string, companies: Company[]): C
 
   // 1. LIMPEZA TOTAL PARA NUMEROS
   // Remove tudo que não é dígito para buscar CNPJ/CPF "corrido"
-  const textOnlyNumbers = textNormalized.replace(/\D/g, '');
+  const normalizedForNumbers = textNormalized
+    .replace(/\s+/g, '')    // remove TODOS os espaços
+    .replace(/[^\d]/g, ''); // remove tudo que não é número
 
   for (const company of companies) {
     const companyDocClean = company.docNumber.replace(/\D/g, '');
