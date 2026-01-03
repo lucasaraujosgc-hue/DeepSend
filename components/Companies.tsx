@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, Plus, Building2, User, Copy, Check, X, Upload, Pencil, Trash, Loader2 } from 'lucide-react';
 import { Company } from '../types';
@@ -83,14 +84,20 @@ const Companies: React.FC = () => {
             whatsapp: newCompany.whatsapp
         };
 
-        await api.saveCompany(payload);
+        const result = await api.saveCompany(payload);
+        
+        if (result && (result as any).error) {
+            throw new Error((result as any).error);
+        }
+
         await loadCompanies(); // Reload to get fresh data/IDs
         
         setIsModalOpen(false);
         setEditingId(null);
         setNewCompany({ name: '', docNumber: '', type: 'CNPJ', email: '', whatsapp: '' });
-    } catch (error) {
-        alert('Erro ao salvar empresa.');
+    } catch (error: any) {
+        console.error("Erro ao salvar:", error);
+        alert(`Erro ao salvar empresa: ${error.message || 'Erro desconhecido'}`);
     }
   };
 
@@ -117,20 +124,25 @@ const Companies: React.FC = () => {
       const wsname = wb.SheetNames[0];
       const ws = wb.Sheets[wsname];
       const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
-      const rows = data.slice(1);
+      const rows = data.slice(1); // Ignora cabeçalho
+
+      console.log("Dados do Excel Lidos:", rows); // Debug para o usuário ver o que está sendo lido
 
       let importedCount = 0;
       for (const row of rows) {
-        if (row.length < 2) continue;
-        const docNumberRaw = String(row[0] || '');
-        const name = String(row[1] || '');
-        const email = String(row[2] || '');
-        const whatsapp = String(row[3] || '');
+        if (!row || row.length < 2) continue; // Pula linhas vazias
+        
+        const docNumberRaw = String(row[0] || '').trim();
+        const name = String(row[1] || '').trim();
+        const email = String(row[2] || '').trim();
+        const whatsapp = String(row[3] || '').trim();
         let typeRaw = String(row[4] || '').toUpperCase().trim();
         let type: 'CNPJ' | 'CPF' | 'MEI' = 'CNPJ';
+        
         if (typeRaw === 'MEI') type = 'MEI';
         else if (typeRaw === 'CPF') type = 'CPF';
 
+        // Validação mínima
         if (docNumberRaw && name) {
             try {
                 await api.saveCompany({
@@ -138,7 +150,7 @@ const Companies: React.FC = () => {
                 });
                 importedCount++;
             } catch (e) {
-                console.error("Falha ao importar linha", row);
+                console.error("Falha ao importar linha", row, e);
             }
         }
       }
@@ -147,7 +159,7 @@ const Companies: React.FC = () => {
         alert(`${importedCount} empresas importadas com sucesso!`);
         loadCompanies();
       } else {
-        alert("Nenhuma empresa válida encontrada no arquivo.");
+        alert("Nenhuma empresa válida encontrada no arquivo.\n\nCertifique-se que:\n1. A Coluna A tem o Documento (CNPJ/CPF).\n2. A Coluna B tem o Nome.\n3. O arquivo não está vazio.");
       }
       
       if (fileInputRef.current) fileInputRef.current.value = '';

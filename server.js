@@ -205,6 +205,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 // --- Settings Route (New for Categories) ---
 app.get('/api/settings', (req, res) => {
     const db = getDb(req.user);
+    if (!db) return res.status(500).json({ error: 'Database error' });
     db.get("SELECT settings FROM user_settings WHERE id = 1", (err, row) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(row ? JSON.parse(row.settings) : null);
@@ -213,6 +214,7 @@ app.get('/api/settings', (req, res) => {
 
 app.post('/api/settings', (req, res) => {
     const db = getDb(req.user);
+    if (!db) return res.status(500).json({ error: 'Database error' });
     const settingsJson = JSON.stringify(req.body);
     db.run("INSERT INTO user_settings (id, settings) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET settings=excluded.settings", [settingsJson], (err) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -222,15 +224,43 @@ app.post('/api/settings', (req, res) => {
 
 // --- Companies ---
 app.get('/api/companies', (req, res) => { 
-    getDb(req.user).all('SELECT * FROM companies ORDER BY name ASC', (err, rows) => res.json(rows || [])); 
+    const db = getDb(req.user);
+    if (!db) return res.status(500).json({ error: 'Database error' });
+    db.all('SELECT * FROM companies ORDER BY name ASC', (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(rows || []);
+    }); 
 });
+
 app.post('/api/companies', (req, res) => {
     const { id, name, docNumber, type, email, whatsapp } = req.body;
     const db = getDb(req.user);
-    if (id) db.run(`UPDATE companies SET name=?, docNumber=?, type=?, email=?, whatsapp=? WHERE id=?`, [name, docNumber, type, email, whatsapp, id], function() { res.json({success: true, id}) });
-    else db.run(`INSERT INTO companies (name, docNumber, type, email, whatsapp) VALUES (?, ?, ?, ?, ?)`, [name, docNumber, type, email, whatsapp], function() { res.json({success: true, id: this.lastID}) });
+    if (!db) return res.status(500).json({ error: 'Database error' });
+
+    if (id) {
+        db.run(`UPDATE companies SET name=?, docNumber=?, type=?, email=?, whatsapp=? WHERE id=?`, 
+            [name, docNumber, type, email, whatsapp, id], 
+            function(err) { 
+                if (err) return res.status(500).json({ error: err.message });
+                res.json({success: true, id});
+            });
+    } else {
+        db.run(`INSERT INTO companies (name, docNumber, type, email, whatsapp) VALUES (?, ?, ?, ?, ?)`, 
+            [name, docNumber, type, email, whatsapp], 
+            function(err) { 
+                if (err) return res.status(500).json({ error: err.message });
+                res.json({success: true, id: this.lastID});
+            });
+    }
 });
-app.delete('/api/companies/:id', (req, res) => { getDb(req.user).run('DELETE FROM companies WHERE id = ?', [req.params.id], (err) => res.json({ success: !err })); });
+app.delete('/api/companies/:id', (req, res) => { 
+    const db = getDb(req.user);
+    if (!db) return res.status(500).json({ error: 'Database error' });
+    db.run('DELETE FROM companies WHERE id = ?', [req.params.id], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true });
+    });
+});
 
 // --- Tasks ---
 app.get('/api/tasks', (req, res) => {
