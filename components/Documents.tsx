@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive, Loader2, FilePlus, AlertTriangle, Trash } from 'lucide-react';
+import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive, Loader2, FilePlus, AlertTriangle, Trash, ChevronLeft, ChevronRight } from 'lucide-react';
 import { DOCUMENT_CATEGORIES } from '../constants';
 import { UserSettings, Document, Company, UploadedFile } from '../types';
 import { identifyCategory, identifyCompany, extractTextFromPDF, removeAccents } from '../utils/documentProcessor';
@@ -33,15 +33,19 @@ const Documents: React.FC<DocumentsProps> = ({
   onToggleStatus,
   onUploadSuccess
 }) => {
-  const getCurrentCompetence = () => {
+  const getInitialCompetence = () => {
     const now = new Date();
+    // Se for dia 15 ou antes, provavelmente estamos trabalhando na competência do mês anterior
+    if (now.getDate() <= 15) {
+        now.setMonth(now.getMonth() - 1);
+    }
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const yyyy = now.getFullYear();
     return `${mm}/${yyyy}`;
   };
 
-  const [competence, setCompetence] = useState(getCurrentCompetence());
-  const [activeCompetence, setActiveCompetence] = useState(getCurrentCompetence());
+  const [competence, setCompetence] = useState(getInitialCompetence());
+  const [activeCompetence, setActiveCompetence] = useState(getInitialCompetence());
   
   const [companies, setCompanies] = useState<Company[]>([]);
   const [dbStatuses, setDbStatuses] = useState<any[]>([]); 
@@ -49,7 +53,7 @@ const Documents: React.FC<DocumentsProps> = ({
 
   // Processing State
   const [localPath, setLocalPath] = useState('');
-  const [processingCompetence, setProcessingCompetence] = useState(getCurrentCompetence());
+  const [processingCompetence, setProcessingCompetence] = useState(getInitialCompetence());
   const [processing, setProcessing] = useState(false);
   const [isUploadingConfirmed, setIsUploadingConfirmed] = useState(false);
   
@@ -90,6 +94,16 @@ const Documents: React.FC<DocumentsProps> = ({
   const visibleMatrixCategories = userSettings.visibleDocumentCategories.length > 0 
     ? userSettings.visibleDocumentCategories 
     : DOCUMENT_CATEGORIES.slice(0, 8);
+
+  // Helper to change competence via arrows
+  const changeCompetence = (current: string, delta: number, setter: (val: string) => void) => {
+      if (!current.includes('/')) return;
+      const [m, y] = current.split('/').map(Number);
+      const date = new Date(y, m - 1 + delta, 1);
+      const newM = String(date.getMonth() + 1).padStart(2, '0');
+      const newY = date.getFullYear();
+      setter(`${newM}/${newY}`);
+  };
 
   const handleProcessClick = () => {
     if (fileInputRef.current) {
@@ -395,31 +409,47 @@ const Documents: React.FC<DocumentsProps> = ({
       <div className="bg-white rounded-xl shadow-sm border-0 overflow-hidden mb-4">
         <div className="bg-blue-600 text-white py-3 px-6">
             <h5 className="mb-0 flex items-center gap-2 font-bold">
-                <CalendarCheck className="w-5 h-5" /> Verificar Documentos por Competência (Normal)
+                <CalendarCheck className="w-5 h-5" /> Verificar Documentos por Competência
             </h5>
         </div>
         <div className="p-6">
             <form onSubmit={handleSearchCompetence}>
                 <div className="flex flex-col md:flex-row gap-4 items-end">
                     <div className="flex-1">
-                        <label htmlFor="competencia" className="block text-sm font-semibold text-gray-700 mb-2">Digite a competência (MM/AAAA)</label>
-                        <div className="relative">
-                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
-                                <CalendarCheck className="w-5 h-5" />
-                            </span>
-                            <input 
-                                type="text" 
-                                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" 
-                                id="competencia" 
-                                placeholder="Ex: 05/2023" 
-                                value={competence}
-                                onChange={(e) => {
-                                    let val = e.target.value.replace(/\D/g, '');
-                                    if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 6);
-                                    setCompetence(val);
-                                }}
-                                required 
-                            />
+                        <label htmlFor="competencia" className="block text-sm font-semibold text-gray-700 mb-2">Selecione a competência</label>
+                        <div className="flex items-center gap-2">
+                            <button 
+                                type="button"
+                                onClick={() => changeCompetence(competence, -1, setCompetence)}
+                                className="p-2 border border-gray-300 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors"
+                            >
+                                <ChevronLeft className="w-5 h-5" />
+                            </button>
+                            <div className="relative flex-1">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                                    <CalendarCheck className="w-5 h-5" />
+                                </span>
+                                <input 
+                                    type="text" 
+                                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-center font-medium text-lg" 
+                                    id="competencia" 
+                                    placeholder="MM/AAAA" 
+                                    value={competence}
+                                    onChange={(e) => {
+                                        let val = e.target.value.replace(/\D/g, '');
+                                        if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 6);
+                                        setCompetence(val);
+                                    }}
+                                    required 
+                                />
+                            </div>
+                            <button 
+                                type="button"
+                                onClick={() => changeCompetence(competence, 1, setCompetence)}
+                                className="p-2 border border-gray-300 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors"
+                            >
+                                <ChevronRight className="w-5 h-5" />
+                            </button>
                         </div>
                     </div>
                     <div className="flex-1 md:flex-none md:w-48">
@@ -467,17 +497,33 @@ const Documents: React.FC<DocumentsProps> = ({
                 {/* Processing Competence */}
                 <div>
                    <label className="block text-sm font-semibold text-gray-700 mb-1">Competência do Processamento</label>
-                   <input 
-                        type="text" 
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="MM/AAAA"
-                        value={processingCompetence}
-                        onChange={(e) => {
-                            let val = e.target.value.replace(/\D/g, '');
-                            if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 6);
-                            setProcessingCompetence(val);
-                        }}
-                    />
+                   <div className="flex gap-1">
+                       <button 
+                           type="button"
+                           onClick={() => changeCompetence(processingCompetence, -1, setProcessingCompetence)}
+                           className="p-2 border border-gray-300 rounded-l-lg hover:bg-gray-100"
+                       >
+                           <ChevronLeft className="w-4 h-4" />
+                       </button>
+                       <input 
+                            type="text" 
+                            className="w-full border-y border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-center"
+                            placeholder="MM/AAAA"
+                            value={processingCompetence}
+                            onChange={(e) => {
+                                let val = e.target.value.replace(/\D/g, '');
+                                if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 6);
+                                setProcessingCompetence(val);
+                            }}
+                        />
+                       <button 
+                           type="button"
+                           onClick={() => changeCompetence(processingCompetence, 1, setProcessingCompetence)}
+                           className="p-2 border border-gray-300 rounded-r-lg hover:bg-gray-100"
+                       >
+                           <ChevronRight className="w-4 h-4" />
+                       </button>
+                   </div>
                 </div>
 
                 {/* Filter Company */}

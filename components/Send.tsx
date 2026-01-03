@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Send as SendIcon, Mail, MessageCircle, FileText, Trash, Clock, Check, Info, ArrowLeft, X, CheckSquare, Calendar, Loader2 } from 'lucide-react';
+import { Send as SendIcon, Mail, MessageCircle, FileText, Trash, Clock, Check, Info, ArrowLeft, X, CheckSquare, Calendar, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Document, Company, UserSettings } from '../types';
 import { api } from '../services/api';
 
@@ -14,14 +14,17 @@ interface SendProps {
 }
 
 const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDocuments, userSettings, onDeleteDocument, onClearPendingDocuments }) => {
-  const getCurrentCompetence = () => {
+  const getInitialCompetence = () => {
     const now = new Date();
+    if (now.getDate() <= 15) {
+        now.setMonth(now.getMonth() - 1);
+    }
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const yyyy = now.getFullYear();
     return `${mm}/${yyyy}`;
   };
 
-  const [competence, setCompetence] = useState(getCurrentCompetence());
+  const [competence, setCompetence] = useState(getInitialCompetence());
   const [subject, setSubject] = useState('Folha de Pagamento');
   // Mensagem padrão fixa conforme solicitado
   const [message, setMessage] = useState('Segue em anexo os seguintes documentos:');
@@ -42,6 +45,15 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
         .catch(err => console.error(err))
         .finally(() => setLoadingCompanies(false));
   }, []);
+
+  const changeCompetence = (delta: number) => {
+    if (!competence.includes('/')) return;
+    const [m, y] = competence.split('/').map(Number);
+    const date = new Date(y, m - 1 + delta, 1);
+    const newM = String(date.getMonth() + 1).padStart(2, '0');
+    const newY = date.getFullYear();
+    setCompetence(`${newM}/${newY}`);
+  };
 
   const pendingDocs = documents.filter(doc => doc.status === 'pending' && doc.competence === competence);
 
@@ -184,9 +196,31 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
                  </div>
                  <div>
                      <label className="block text-sm font-semibold text-gray-700 mb-1">Competência</label>
-                     <div className="flex">
-                         <span className="px-3 bg-gray-100 border border-r-0 border-gray-300 rounded-l-lg flex items-center text-gray-500"><Clock className="w-4 h-4" /></span>
-                         <input type="text" className="w-full border border-gray-300 rounded-r-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500" value={competence} onChange={(e) => { let val = e.target.value.replace(/\D/g, ''); if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 6); setCompetence(val); }} />
+                     <div className="flex gap-1">
+                         <button 
+                             type="button"
+                             onClick={() => changeCompetence(-1)}
+                             className="p-2 border border-gray-300 rounded-l-lg hover:bg-gray-100 text-gray-600"
+                         >
+                             <ChevronLeft className="w-4 h-4" />
+                         </button>
+                         <input 
+                             type="text" 
+                             className="w-full border-y border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-center" 
+                             value={competence} 
+                             onChange={(e) => { 
+                                 let val = e.target.value.replace(/\D/g, ''); 
+                                 if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 6); 
+                                 setCompetence(val); 
+                             }} 
+                        />
+                         <button 
+                             type="button"
+                             onClick={() => changeCompetence(1)}
+                             className="p-2 border border-gray-300 rounded-r-lg hover:bg-gray-100 text-gray-600"
+                         >
+                             <ChevronRight className="w-4 h-4" />
+                         </button>
                      </div>
                  </div>
              </div>

@@ -1,3 +1,4 @@
+
 import 'dotenv/config';
 import express from 'express';
 import { createRequire } from 'module';
@@ -146,12 +147,15 @@ const buildEmailHtml = (messageBody, documents, emailSignature) => {
 
 app.post('/api/login', (req, res) => {
     const { user, password } = req.body;
-    // Se não estiver configurado no .env, aceita admin/admin
-    const envUser = process.env.USER || 'admin';
-    const envPass = process.env.PASSWORD || 'admin';
+    
+    // Parse environment variables for multi-user support
+    const envUsers = (process.env.USERS || 'admin').split(',');
+    const envPasss = (process.env.PASSWORDS || 'admin').split(',');
 
-    if (user === envUser && password === envPass) {
-        res.json({ success: true, token: 'mock-session-token' });
+    const userIndex = envUsers.indexOf(user);
+
+    if (userIndex !== -1 && envPasss[userIndex] === password) {
+        res.json({ success: true, token: `session-${Date.now()}-${user}` });
     } else {
         res.status(401).json({ error: 'Credenciais inválidas' });
     }

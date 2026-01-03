@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Upload as UploadIcon, X, FileText, Calendar, AlertCircle, Loader2 } from 'lucide-react';
+import { Upload as UploadIcon, X, FileText, Calendar, AlertCircle, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { DOCUMENT_CATEGORIES } from '../constants';
 import { calcularTodosVencimentos } from '../utils/dateHelpers';
 import { UploadedFile, Company, UserSettings } from '../types';
@@ -18,6 +18,16 @@ interface UploadProps {
 }
 
 const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSettings = DEFAULT_USER_SETTINGS }) => {
+  const getInitialCompetence = () => {
+    const now = new Date();
+    if (now.getDate() <= 15) {
+        now.setMonth(now.getMonth() - 1);
+    }
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const yyyy = now.getFullYear();
+    return `${mm}/${yyyy}`;
+  };
+
   const [competence, setCompetence] = useState('');
   const [selectedCompanyId, setSelectedCompanyId] = useState<number | string>('');
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -41,10 +51,7 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
       setCompetence(preFillData.competence);
       setSelectedCompanyId(preFillData.companyId);
     } else {
-      const now = new Date();
-      const mm = String(now.getMonth() + 1).padStart(2, '0');
-      const yyyy = now.getFullYear();
-      setCompetence(`${mm}/${yyyy}`);
+      setCompetence(getInitialCompetence());
     }
   }, [preFillData]);
 
@@ -60,6 +67,15 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
         }));
     }
   }, [competence, userSettings]);
+
+  const changeCompetence = (delta: number) => {
+      if (!competence.includes('/')) return;
+      const [m, y] = competence.split('/').map(Number);
+      const date = new Date(y, m - 1 + delta, 1);
+      const newM = String(date.getMonth() + 1).padStart(2, '0');
+      const newY = date.getFullYear();
+      setCompetence(`${newM}/${newY}`);
+  };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -218,17 +234,33 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
                 </div>
                 <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Competência (MM/AAAA)</label>
-                    <input 
-                        type="text"
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="MM/AAAA"
-                        value={competence}
-                        onChange={e => {
-                            let val = e.target.value.replace(/\D/g, '');
-                            if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 6);
-                            setCompetence(val);
-                        }}
-                    />
+                    <div className="flex gap-1">
+                        <button 
+                            type="button"
+                            onClick={() => changeCompetence(-1)}
+                            className="p-2 border border-gray-300 rounded-l-lg hover:bg-gray-100"
+                        >
+                            <ChevronLeft className="w-4 h-4" />
+                        </button>
+                        <input 
+                            type="text"
+                            className="w-full border-y border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-center"
+                            placeholder="MM/AAAA"
+                            value={competence}
+                            onChange={e => {
+                                let val = e.target.value.replace(/\D/g, '');
+                                if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 6);
+                                setCompetence(val);
+                            }}
+                        />
+                        <button 
+                            type="button"
+                            onClick={() => changeCompetence(1)}
+                            className="p-2 border border-gray-300 rounded-r-lg hover:bg-gray-100"
+                        >
+                            <ChevronRight className="w-4 h-4" />
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
