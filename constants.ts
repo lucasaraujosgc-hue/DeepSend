@@ -35,8 +35,8 @@ Lucas Araújo`,
     'Honorários',
     'Notas Fiscais'
   ],
-  customCategories: [], // Inicialmente vazio
   categoryKeywords: {
+    // Atualizado com base nos PDFs reais
     'FGTS': ['fgts', 'gfd', 'fundo de garantia', 'guia do fgts', 'fgts digital'],
     'Folha de Pagamento': ['folha mensal', 'extrato mensal', 'folha de pagamento', 'resumo da folha', 'holerite'],
     'Parcelamento': ['parcelamento', 'parc'],

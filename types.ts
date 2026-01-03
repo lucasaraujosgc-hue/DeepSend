@@ -84,8 +84,7 @@ export interface UserSettings {
   emailSignature: string;
   whatsappTemplate: string;
   visibleDocumentCategories: string[];
-  customCategories: string[]; // Novas categorias criadas pelo usuário
   categoryKeywords: Record<string, string[]>;
-  priorityCategories: string[]; 
+  priorityCategories: string[]; // New field for tie-breaking
   categoryRules: Record<string, CategoryRule>;
 }
