@@ -111,13 +111,13 @@ export const identifyCompany = (textNormalized: string, companies: Company[]): C
     if (companyDocClean.length < 8) continue;
 
     // A. Match Numérico Exato (CNPJ completo)
-    if (textOnlyNumbers.includes(companyDocClean)) {
+    if (normalizedForNumbers.includes(companyDocClean)) {
         return company;
     }
 
     // B. Match Raiz CNPJ (8 primeiros dígitos)
     const root = companyDocClean.substring(0, 8);
-    if (textOnlyNumbers.includes(root)) {
+    if (normalizedForNumbers.includes(root)) {
         return company;
     }
   }
