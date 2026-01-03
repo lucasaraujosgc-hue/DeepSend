@@ -37,11 +37,11 @@ Lucas Araújo`,
   ],
   categoryKeywords: {
     // Atualizado com base nos PDFs reais
-    'FGTS': ['fgts', 'gfd', 'fundo de garantia', 'guia do fgts'],
-    'Folha de Pagamento': ['folha mensal', 'extrato mensal', 'folha de pagamento', 'resumo da folha'],
+    'FGTS': ['fgts', 'gfd', 'fundo de garantia', 'guia do fgts', 'fgts digital'],
+    'Folha de Pagamento': ['folha mensal', 'extrato mensal', 'folha de pagamento', 'resumo da folha', 'holerite'],
     'Parcelamento': ['parcelamento', 'parc'],
     'Simples Nacional': ['simples nacional', 'das', 'documento de arrecadacao'],
-    'INSS': ['inss', 'cp segurados', 'cp descontada', 'previdencia social', 'gps'],
+    'INSS': ['inss', 'cp segurados', 'cp descontada', 'previdencia social', 'gps', 'receita federal'],
     'Notas Fiscais': ['nota fiscal', 'danfe', 'nf-e', 'nfs-e'],
     'Honorários': ['honorarios', 'cora.com.br', 'boleto']
   },
