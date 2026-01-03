@@ -29,7 +29,10 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
     const pdf = await loadingTask.promise;
     let fullText = '';
 
-    for (let i = 1; i <= pdf.numPages; i++) {
+    // Limit to first 3 pages to save memory/time, usually header info is on page 1
+    const maxPages = Math.min(pdf.numPages, 3);
+
+    for (let i = 1; i <= maxPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
 
@@ -59,102 +62,87 @@ export const identifyCategory = (
   
   const matchedCategories: string[] = [];
 
-  // 1. Scan User Keywords
+  // 1. Scan User Keywords (Dynamic)
   for (const [category, keywords] of Object.entries(keywordMap)) {
     if (!keywords || !Array.isArray(keywords)) continue;
     
     for (const keyword of keywords) {
       if (!keyword) continue;
       const kwNormalized = removeAccents(keyword);
+      // Check: keyword must be at least 3 chars to avoid noise
       if (kwNormalized.length > 2 && textNormalized.includes(kwNormalized)) {
         if (!matchedCategories.includes(category)) {
             matchedCategories.push(category);
         }
-        break; 
+        break; // Found one keyword for this category, move to next category
       }
     }
   }
 
-  // 2. Scan Hardcoded Fallbacks
-  if (textNormalized.includes('cora.com.br') || textNormalized.includes('honorarios')) {
-      if (!matchedCategories.includes('Honorários')) matchedCategories.push('Honorários');
-  }
-  
-  if (textNormalized.includes('nota fiscal') || textNormalized.includes('danfe') || textNormalized.includes('nf-e')) {
-      if (!matchedCategories.includes('Notas Fiscais')) matchedCategories.push('Notas Fiscais');
+  // 2. Resolve Conflict using Priority
+  if (matchedCategories.length > 1) {
+      const priorityMatch = matchedCategories.find(cat => priorityCategories.includes(cat));
+      if (priorityMatch) return priorityMatch;
   }
 
-  if (
-      (textNormalized.includes('folha') && textNormalized.includes('pagamento')) ||
-      (textNormalized.includes('resumo') && textNormalized.includes('folha')) ||
-      textNormalized.includes('extrato mensal')
-  ) {
-      if (!matchedCategories.includes('Folha de Pagamento')) matchedCategories.push('Folha de Pagamento');
-  }
-
-  if (textNormalized.includes('documento de arrecadacao') && (textNormalized.includes('simples nacional') || textNormalized.includes('das'))) {
-      if (!matchedCategories.includes('Simples Nacional')) matchedCategories.push('Simples Nacional');
-  }
-
-  if (textNormalized.includes('fgts') && (textNormalized.includes('guia') || textNormalized.includes('digital') || textNormalized.includes('fundo de garantia'))) {
-      if (!matchedCategories.includes('FGTS')) matchedCategories.push('FGTS');
-  }
-
-  if (matchedCategories.length === 0) return null;
-  if (matchedCategories.length === 1) return matchedCategories[0];
-
-  const priorityMatch = matchedCategories.find(cat => priorityCategories.includes(cat));
-  if (priorityMatch) return priorityMatch;
-
-  return matchedCategories[0];
+  return matchedCategories[0] || null;
 };
 
 /**
- * Identifies the company using STRICT numeric matching OR Loose Name matching.
+ * Identifies the company using Numeric Match OR Partial Name Match.
  */
 export const identifyCompany = (textNormalized: string, companies: Company[]): Company | null => {
   if (!textNormalized) return null;
 
-  // 1. ESTRATÉGIA NUMÉRICA "BRUTA"
-  // Remove TUDO que não for número do texto do PDF. 
-  // Ex: "CNPJ: 12.345.678/0001-90" vira "12345678000190"
-  // Isso resolve o problema de formatação, espaços extras ou quebras de linha no meio do número.
+  // 1. LIMPEZA TOTAL PARA NUMEROS
+  // Remove tudo que não é dígito para buscar CNPJ/CPF "corrido"
   const textOnlyNumbers = textNormalized.replace(/\D/g, '');
 
   for (const company of companies) {
     const companyDocClean = company.docNumber.replace(/\D/g, '');
     
-    // Ignora empresas com cadastro incompleto
     if (companyDocClean.length < 8) continue;
 
-    // A. Match Completo (Ex: CPF ou CNPJ inteiro)
+    // A. Match Numérico Exato (CNPJ completo)
     if (textOnlyNumbers.includes(companyDocClean)) {
         return company;
     }
 
-    // B. Match Raiz CNPJ (Primeiros 8 dígitos)
-    // Útil se o PDF tiver a filial diferente ou erro no final
+    // B. Match Raiz CNPJ (8 primeiros dígitos)
     const root = companyDocClean.substring(0, 8);
     if (textOnlyNumbers.includes(root)) {
         return company;
     }
   }
 
-  // 2. ESTRATÉGIA POR NOME (Fallback)
-  // Remove termos comuns que atrapalham o match exato
-  const commonTerms = ['ltda', 's.a', 'me', 'epp', 'eireli', 'limitada', 'sa'];
+  // 2. ESTRATÉGIA POR NOME (Parcial e Inteligente)
+  const commonTerms = ['ltda', 's.a', 'me', 'epp', 'eireli', 'limitada', 'sa', '-', 'cpf:', 'cnpj:'];
   
   for (const company of companies) {
     let nameClean = removeAccents(company.name);
     
-    // Remove sufixos comuns do nome da empresa para buscar o "nome fantasia" implícito
+    // Remove sufixos comuns do cadastro da empresa
     commonTerms.forEach(term => {
         nameClean = nameClean.replace(new RegExp(`\\b${term}\\b`, 'g'), '').trim();
     });
 
-    // Só busca se sobrar um nome relevante (> 4 letras)
-    if (nameClean.length > 4 && textNormalized.includes(nameClean)) {
+    // Se o nome ficou muito curto, ignora (ex: "J A")
+    if (nameClean.length < 3) continue;
+
+    // A. Match Nome Limpo Completo
+    if (textNormalized.includes(nameClean)) {
       return company;
+    }
+
+    // B. Match PRIMEIRAS DUAS PALAVRAS (Muito útil para nomes longos quebrados)
+    // Ex: "VM INSTALACOES" no PDF bate com "VM INSTALACOES ELETRICAS" no banco
+    const parts = nameClean.split(' ');
+    if (parts.length >= 2) {
+        const firstTwoWords = `${parts[0]} ${parts[1]}`;
+        // Só aceita se as duas palavras somadas tiverem tamanho razoável (evita "De Da")
+        if (firstTwoWords.length > 5 && textNormalized.includes(firstTwoWords)) {
+            return company;
+        }
     }
   }
 

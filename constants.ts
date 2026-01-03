@@ -36,15 +36,16 @@ Lucas Araújo`,
     'Notas Fiscais'
   ],
   categoryKeywords: {
-    'FGTS': ['fgts mensal'],
-    'Folha de Pagamento': ['Extrato Mensal'],
-    'Parcelamento': ['Parcelamento'],
-    'Simples Nacional': ['simples nacional', 'das'],
-    'INSS': ['cp seguros', 'cp segurados'],
-    'Notas Fiscais': ['nota fiscal'],
-    'Honorários': ['um banco', 'cora.com.br']
+    // Atualizado com base nos PDFs reais
+    'FGTS': ['fgts', 'gfd', 'fundo de garantia', 'guia do fgts'],
+    'Folha de Pagamento': ['folha mensal', 'extrato mensal', 'folha de pagamento', 'resumo da folha'],
+    'Parcelamento': ['parcelamento', 'parc'],
+    'Simples Nacional': ['simples nacional', 'das', 'documento de arrecadacao'],
+    'INSS': ['inss', 'cp segurados', 'cp descontada', 'previdencia social', 'gps'],
+    'Notas Fiscais': ['nota fiscal', 'danfe', 'nf-e', 'nfs-e'],
+    'Honorários': ['honorarios', 'cora.com.br', 'boleto']
   },
-  priorityCategories: [], // Default empty
+  priorityCategories: [], 
   categoryRules: {
     'Simples Nacional': { day: 20, rule: 'postergado' },
     'FGTS': { day: 7, rule: 'antecipado' },
@@ -53,6 +54,6 @@ Lucas Araújo`,
     'Folha de Pagamento': { day: 5, rule: 'quinto_dia_util' },
     'Contracheque': { day: 5, rule: 'quinto_dia_util' },
     'Parcelamento': { day: 0, rule: 'ultimo_dia_util' },
-    'Notas Fiscais': { day: 1, rule: 'fixo' }, // Exemplo
+    'Notas Fiscais': { day: 1, rule: 'fixo' }, 
   }
 };
