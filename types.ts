@@ -64,6 +64,8 @@ export interface ScheduledMessage {
   };
   targetType: 'normal' | 'mei' | 'selected';
   selectedCompanyIds?: number[];
+  attachmentFilename?: string;
+  attachmentOriginalName?: string;
 }
 
 export interface UploadedFile {
