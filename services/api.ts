@@ -3,7 +3,7 @@ import { Company, Task, Document, UserSettings } from '../types';
 
 const API_URL = '/api';
 
-const getHeaders = () => {
+const getHeaders = (): Record<string, string> => {
   const token = localStorage.getItem('cm_auth_token');
   return {
     'Content-Type': 'application/json',
@@ -11,9 +11,12 @@ const getHeaders = () => {
   };
 };
 
-const getAuthHeader = () => {
+const getAuthHeader = (): Record<string, string> => {
     const token = localStorage.getItem('cm_auth_token');
-    return token ? { 'Authorization': `Bearer ${token}` } : {};
+    if (token) {
+        return { 'Authorization': `Bearer ${token}` };
+    }
+    return {};
 };
 
 export const api = {
