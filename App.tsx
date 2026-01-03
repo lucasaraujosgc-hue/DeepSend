@@ -12,42 +12,58 @@ import ScheduledMessages from './components/ScheduledMessages';
 import Settings from './components/Settings';
 import Send from './components/Send'; 
 import Login from './components/Login';
-import { DEFAULT_USER_SETTINGS, MOCK_DOCUMENTS } from './constants';
+import { DEFAULT_USER_SETTINGS, MOCK_DOCUMENTS, DOCUMENT_CATEGORIES as DEFAULT_CATEGORIES } from './constants';
 import { UserSettings, Document, UploadedFile } from './types';
+import { api } from './services/api';
 
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [activePage, setActivePage] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
-  // Lifted state for User Settings
   const [userSettings, setUserSettings] = useState<UserSettings>(DEFAULT_USER_SETTINGS);
-
-  // Lifted state for Documents (Shared between Documents, Upload, and Send)
   const [documents, setDocuments] = useState<Document[]>(MOCK_DOCUMENTS);
-
-  // State for pre-filling Upload form
   const [uploadPreFill, setUploadPreFill] = useState<{companyId: number, competence: string} | null>(null);
 
-  // Check for stored token on mount
+  // Computes the full list of categories (Default + Custom from settings)
+  const fullCategoriesList = [
+      ...DEFAULT_CATEGORIES,
+      ...(userSettings.customCategories || [])
+  ];
+
   useEffect(() => {
     const token = localStorage.getItem('cm_auth_token');
     if (token) {
         setIsAuthenticated(true);
+        loadSettings();
     }
   }, []);
+
+  const loadSettings = async () => {
+      try {
+          const settings = await api.getSettings();
+          if (settings) {
+              // Merge with default to ensure structure integrity
+              setUserSettings({ ...DEFAULT_USER_SETTINGS, ...settings });
+          }
+      } catch (e) {
+          console.error("Failed to load settings", e);
+      }
+  };
 
   const handleLoginSuccess = (token?: string, remember?: boolean) => {
       if (remember && token) {
           localStorage.setItem('cm_auth_token', token);
       }
       setIsAuthenticated(true);
+      loadSettings();
   };
 
   const handleLogout = () => {
       localStorage.removeItem('cm_auth_token');
       setIsAuthenticated(false);
       setActivePage('dashboard');
+      setUserSettings(DEFAULT_USER_SETTINGS);
   };
 
   if (!isAuthenticated) {
@@ -63,7 +79,6 @@ const App: React.FC = () => {
     setActivePage('documents');
   }
 
-  // Handle new file upload from Upload tab
   const handleUploadSuccess = (files: UploadedFile[], companyId: number, competence: string) => {
       const newDocs: Document[] = files.map(f => ({
           id: Date.now() + Math.random(),
@@ -73,14 +88,22 @@ const App: React.FC = () => {
           dueDate: f.dueDate,
           status: 'pending', 
           companyId: companyId,
-          companyName: 'Loading...', // Should be resolved locally or via api fetch if critical
+          companyName: 'Loading...', 
           file: f.file,
-          serverFilename: f.serverFilename // Crucial for sending
+          serverFilename: f.serverFilename
       }));
       setDocuments(prev => [...prev, ...newDocs]);
   };
 
-  // Toggle status in Matrix (Visual manual override)
+  const handleSaveSettings = async (newSettings: UserSettings) => {
+      try {
+          await api.saveSettings(newSettings);
+          setUserSettings(newSettings);
+      } catch (e) {
+          alert("Erro ao salvar configurações");
+      }
+  };
+
   const handleToggleStatus = (companyId: number, category: string, competence: string) => {
       setDocuments(prev => {
           const existingIndex = prev.findIndex(d => 
@@ -90,7 +113,6 @@ const App: React.FC = () => {
           );
 
           if (existingIndex >= 0) {
-              // Toggle existing
               const newDocs = [...prev];
               newDocs[existingIndex] = {
                   ...newDocs[existingIndex],
@@ -98,7 +120,6 @@ const App: React.FC = () => {
               };
               return newDocs;
           } else {
-              // Create manual entry
               const newDoc: Document = {
                   id: Date.now(),
                   name: `Manual - ${category}`,
@@ -115,9 +136,7 @@ const App: React.FC = () => {
       });
   };
 
-  // Handle Sending from Send Tab
   const handleSendDocuments = (docIds: number[]) => {
-      // Aqui só atualizamos status, não removemos se falhar.
       setDocuments(prev => prev.map(doc => {
           if (docIds.includes(doc.id)) {
               return { ...doc, status: 'sent' };
@@ -126,14 +145,12 @@ const App: React.FC = () => {
       }));
   };
 
-  // Handle Delete Single Document
   const handleDeleteDocument = (id: number) => {
       if(window.confirm("Tem certeza que deseja remover este arquivo da lista de envio?")) {
           setDocuments(prev => prev.filter(d => d.id !== id));
       }
   };
 
-  // Handle Clear All Pending Documents (for current view usually, but here clears all pending)
   const handleClearPendingDocuments = (competenceFilter: string) => {
       if(window.confirm(`Tem certeza que deseja excluir TODOS os arquivos pendentes da competência ${competenceFilter}?`)) {
           setDocuments(prev => prev.filter(d => !(d.status === 'pending' && d.competence === competenceFilter)));
@@ -149,6 +166,8 @@ const App: React.FC = () => {
       case 'whatsapp':
         return <WhatsAppConnect />;
       case 'documents':
+        // TODO: Pass fullCategoriesList to Documents if needed for dropdowns, 
+        // though it uses userSettings.visibleDocumentCategories mainly
         return <Documents 
                   userSettings={userSettings} 
                   onNavigateToUpload={handleNavigateToUpload}
@@ -176,14 +195,13 @@ const App: React.FC = () => {
       case 'scheduled':
         return <ScheduledMessages />;
       case 'settings':
-        return <Settings settings={userSettings} onSave={setUserSettings} />;
+        return <Settings 
+                  settings={userSettings} 
+                  onSave={handleSaveSettings} 
+                  availableCategories={fullCategoriesList} 
+                />;
       default:
-        return (
-          <div className="flex flex-col items-center justify-center h-[50vh] text-gray-400">
-            <h2 className="text-xl font-semibold mb-2">Em Construção</h2>
-            <p>A página {activePage} será implementada em breve.</p>
-          </div>
-        );
+        return <div>Página não encontrada</div>;
     }
   };
 
@@ -204,11 +222,11 @@ const App: React.FC = () => {
           </h2>
           <div className="flex items-center gap-4">
              <div className="text-sm text-right hidden sm:block">
-                <p className="font-bold text-gray-700">Lucas Araújo</p>
-                <p className="text-gray-500 text-xs">Contador | CRC-BA 046968/O</p>
+                <p className="font-bold text-gray-700">Usuário</p>
+                <p className="text-gray-500 text-xs">Conectado</p>
              </div>
              <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-700 font-bold border-2 border-white shadow-sm">
-                LA
+                US
              </div>
           </div>
         </header>

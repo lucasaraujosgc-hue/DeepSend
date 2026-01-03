@@ -1,6 +1,20 @@
-import { Company, Task, Document } from '../types';
+
+import { Company, Task, Document, UserSettings } from '../types';
 
 const API_URL = '/api';
+
+const getHeaders = () => {
+  const token = localStorage.getItem('cm_auth_token');
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': token ? `Bearer ${token}` : ''
+  };
+};
+
+const getAuthHeader = () => {
+    const token = localStorage.getItem('cm_auth_token');
+    return token ? { 'Authorization': `Bearer ${token}` } : {};
+};
 
 export const api = {
   // Authentication
@@ -22,9 +36,24 @@ export const api = {
     }
   },
 
+  // Settings
+  getSettings: async (): Promise<UserSettings | null> => {
+      const res = await fetch(`${API_URL}/settings`, { headers: getAuthHeader() });
+      if (!res.ok) return null;
+      return res.json();
+  },
+  
+  saveSettings: async (settings: UserSettings): Promise<void> => {
+      await fetch(`${API_URL}/settings`, {
+          method: 'POST',
+          headers: getHeaders(),
+          body: JSON.stringify(settings)
+      });
+  },
+
   // Companies
   getCompanies: async (): Promise<Company[]> => {
-    const res = await fetch(`${API_URL}/companies`);
+    const res = await fetch(`${API_URL}/companies`, { headers: getAuthHeader() });
     if (!res.ok) throw new Error('Failed to fetch companies');
     return res.json();
   },
@@ -32,19 +61,19 @@ export const api = {
   saveCompany: async (company: Partial<Company>): Promise<{ success: boolean; id: number }> => {
     const res = await fetch(`${API_URL}/companies`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getHeaders(),
       body: JSON.stringify(company),
     });
     return res.json();
   },
 
   deleteCompany: async (id: number): Promise<void> => {
-    await fetch(`${API_URL}/companies/${id}`, { method: 'DELETE' });
+    await fetch(`${API_URL}/companies/${id}`, { method: 'DELETE', headers: getAuthHeader() });
   },
 
   // Tasks (Kanban)
   getTasks: async (): Promise<Task[]> => {
-    const res = await fetch(`${API_URL}/tasks`);
+    const res = await fetch(`${API_URL}/tasks`, { headers: getAuthHeader() });
     if (!res.ok) throw new Error('Failed to fetch tasks');
     return res.json();
   },
@@ -52,26 +81,26 @@ export const api = {
   saveTask: async (task: Partial<Task>): Promise<{ success: boolean; id: number }> => {
     const res = await fetch(`${API_URL}/tasks`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getHeaders(),
       body: JSON.stringify(task),
     });
     return res.json();
   },
 
   deleteTask: async (id: number): Promise<void> => {
-    await fetch(`${API_URL}/tasks/${id}`, { method: 'DELETE' });
+    await fetch(`${API_URL}/tasks/${id}`, { method: 'DELETE', headers: getAuthHeader() });
   },
 
   // Document Status
   getDocumentStatuses: async (competence: string): Promise<any[]> => {
-    const res = await fetch(`${API_URL}/documents/status?competence=${competence}`);
+    const res = await fetch(`${API_URL}/documents/status?competence=${competence}`, { headers: getAuthHeader() });
     return res.json();
   },
 
   updateDocumentStatus: async (companyId: number, category: string, competence: string, status: string): Promise<void> => {
     await fetch(`${API_URL}/documents/status`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getHeaders(),
       body: JSON.stringify({ companyId, category, competence, status }),
     });
   },
@@ -82,6 +111,7 @@ export const api = {
     formData.append('file', file);
     const res = await fetch(`${API_URL}/upload`, {
         method: 'POST',
+        headers: getAuthHeader(),
         body: formData
     });
     if (!res.ok) throw new Error("Upload failed");
@@ -92,7 +122,7 @@ export const api = {
   sendDocuments: async (payload: { documents: any[], subject: string, messageBody: string, channels: any, emailSignature?: string, whatsappTemplate?: string }): Promise<any> => {
     const res = await fetch(`${API_URL}/send-documents`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getHeaders(),
         body: JSON.stringify(payload)
     });
     return res.json();
@@ -100,17 +130,17 @@ export const api = {
 
   // Dashboard Data
   getRecentSends: async (): Promise<any[]> => {
-    const res = await fetch(`${API_URL}/recent-sends`);
+    const res = await fetch(`${API_URL}/recent-sends`, { headers: getAuthHeader() });
     return res.json();
   },
 
   // WhatsApp
   getWhatsAppStatus: async (): Promise<{ status: string; qr: string | null; info?: any }> => {
-    const res = await fetch(`${API_URL}/whatsapp/status`);
+    const res = await fetch(`${API_URL}/whatsapp/status`, { headers: getAuthHeader() });
     return res.json();
   },
 
   disconnectWhatsApp: async (): Promise<void> => {
-    await fetch(`${API_URL}/whatsapp/disconnect`, { method: 'POST' });
+    await fetch(`${API_URL}/whatsapp/disconnect`, { method: 'POST', headers: getAuthHeader() });
   }
 };
