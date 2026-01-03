@@ -5,7 +5,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://esm.sh/pdfjs-dist@3.11.174/build/pdf.worker.min.mjs';
 
 /**
- * Remove acentos e normaliza texto para comparação por nome
+ * Remove acentos e normaliza texto
  */
 export const removeAccents = (text: string): string => {
   if (!text) return '';
@@ -41,7 +41,7 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
           return a.transform[4] - b.transform[4];
         })
         .map((item: any) => item.str)
-        .join(''); // 🔥 SEM ESPAÇO — essencial para números
+        .join(''); // 🔥 NÃO inserir espaço (CNPJ!)
 
       fullText += pageText + ' ';
     }
@@ -54,57 +54,28 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
 };
 
 /**
- * Identifica categoria por palavras-chave
- */
-export const identifyCategory = (
-  textNormalized: string,
-  keywordMap: Record<string, string[]>,
-  priorityCategories: string[] = []
-): string | null => {
-  const matchedCategories: string[] = [];
-
-  for (const [category, keywords] of Object.entries(keywordMap)) {
-    if (!Array.isArray(keywords)) continue;
-
-    for (const keyword of keywords) {
-      const kw = removeAccents(keyword);
-      if (kw.length > 2 && textNormalized.includes(kw)) {
-        matchedCategories.push(category);
-        break;
-      }
-    }
-  }
-
-  if (matchedCategories.length > 1) {
-    return matchedCategories.find(c => priorityCategories.includes(c)) ?? null;
-  }
-
-  return matchedCategories[0] ?? null;
-};
-
-/**
  * Identifica empresa por CNPJ/CPF ou Nome
+ * ⚠️ RECEBE TEXTO BRUTO DO PDF — NÃO PASSE file.name
  */
 export const identifyCompany = (
   rawText: string,
   companies: Company[]
 ): Company | null => {
-  if (!rawText) return null;
+  if (!rawText || rawText.length < 10) return null;
 
-  // 🔢 NORMALIZAÇÃO NUMÉRICA (USA TEXTO BRUTO)
+  // 🔢 Normalização numérica
   const normalizedForNumbers = rawText
     .replace(/\s+/g, '')
     .replace(/[^\d]/g, '');
 
-  // 🔤 NORMALIZAÇÃO PARA NOMES
+  // 🔤 Normalização para nomes
   const textNormalized = removeAccents(rawText)
     .replace(/\s+/g, ' ')
     .trim();
 
-  // 1️⃣ MATCH POR CNPJ / CPF
+  // 1️⃣ Match por CNPJ / CPF
   for (const company of companies) {
     const companyDocClean = company.docNumber.replace(/\D/g, '');
-
     if (companyDocClean.length < 8) continue;
 
     if (normalizedForNumbers.includes(companyDocClean)) {
@@ -117,7 +88,7 @@ export const identifyCompany = (
     }
   }
 
-  // 2️⃣ MATCH POR NOME
+  // 2️⃣ Match por nome
   const commonTerms = [
     'ltda', 's.a', 'me', 'epp', 'eireli',
     'limitada', 'sa', 'cpf', 'cnpj', '-'
@@ -149,4 +120,36 @@ export const identifyCompany = (
   }
 
   return null;
+};
+
+/**
+ * 🔥 FUNÇÃO CORRETA PARA USAR NO UPLOAD
+ * Elimina erro de passar nome do arquivo
+ */
+export const processPdfAndIdentifyCompany = async (
+  file: File,
+  companies: Company[]
+): Promise<Company | null> => {
+
+  console.log('📄 Processando PDF:', file.name);
+
+  const rawText = await extractTextFromPDF(file);
+
+  console.log('🧪 TEXTO EXTRAÍDO (preview):', rawText.slice(0, 200));
+  console.log('🧪 TAMANHO DO TEXTO:', rawText.length);
+
+  if (!rawText) {
+    console.warn('⚠️ Nenhum texto extraído do PDF');
+    return null;
+  }
+
+  const company = identifyCompany(rawText, companies);
+
+  if (!company) {
+    console.warn('❌ Empresa NÃO identificada');
+  } else {
+    console.log('✅ Empresa identificada:', company.name);
+  }
+
+  return company;
 };
