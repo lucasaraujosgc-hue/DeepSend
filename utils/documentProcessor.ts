@@ -41,7 +41,7 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
           return a.transform[4] - b.transform[4];
         })
         .map((item: any) => item.str)
-        .join(''); // 🔥 NÃO inserir espaço (CNPJ!)
+        .join(''); // 🔥 não inserir espaço (preserva CNPJ)
 
       fullText += pageText + ' ';
     }
@@ -54,8 +54,37 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
 };
 
 /**
+ * Identifica categoria por palavras-chave
+ */
+export const identifyCategory = (
+  textNormalized: string,
+  keywordMap: Record<string, string[]>,
+  priorityCategories: string[] = []
+): string | null => {
+  const matchedCategories: string[] = [];
+
+  for (const [category, keywords] of Object.entries(keywordMap)) {
+    if (!Array.isArray(keywords)) continue;
+
+    for (const keyword of keywords) {
+      const kw = removeAccents(keyword);
+      if (kw.length > 2 && textNormalized.includes(kw)) {
+        matchedCategories.push(category);
+        break;
+      }
+    }
+  }
+
+  if (matchedCategories.length > 1) {
+    return matchedCategories.find(c => priorityCategories.includes(c)) ?? null;
+  }
+
+  return matchedCategories[0] ?? null;
+};
+
+/**
  * Identifica empresa por CNPJ/CPF ou Nome
- * ⚠️ RECEBE TEXTO BRUTO DO PDF — NÃO PASSE file.name
+ * ⚠️ Recebe TEXTO BRUTO do PDF
  */
 export const identifyCompany = (
   rawText: string,
@@ -63,7 +92,7 @@ export const identifyCompany = (
 ): Company | null => {
   if (!rawText || rawText.length < 10) return null;
 
-  // 🔢 Normalização numérica
+  // 🔢 Normalização numérica (CNPJ/CPF)
   const normalizedForNumbers = rawText
     .replace(/\s+/g, '')
     .replace(/[^\d]/g, '');
@@ -123,20 +152,19 @@ export const identifyCompany = (
 };
 
 /**
- * 🔥 FUNÇÃO CORRETA PARA USAR NO UPLOAD
- * Elimina erro de passar nome do arquivo
+ * 🔥 Função correta para usar no upload
+ * File → extração → identificação
  */
 export const processPdfAndIdentifyCompany = async (
   file: File,
   companies: Company[]
 ): Promise<Company | null> => {
-
   console.log('📄 Processando PDF:', file.name);
 
   const rawText = await extractTextFromPDF(file);
 
-  console.log('🧪 TEXTO EXTRAÍDO (preview):', rawText.slice(0, 200));
-  console.log('🧪 TAMANHO DO TEXTO:', rawText.length);
+  console.log('🧪 Texto extraído (preview):', rawText.slice(0, 200));
+  console.log('🧪 Tamanho do texto:', rawText.length);
 
   if (!rawText) {
     console.warn('⚠️ Nenhum texto extraído do PDF');
@@ -153,3 +181,4 @@ export const processPdfAndIdentifyCompany = async (
 
   return company;
 };
+
