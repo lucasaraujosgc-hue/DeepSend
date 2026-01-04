@@ -122,7 +122,7 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
         });
 
         if (result.success) {
-            const successIds = result.sentIds || [];
+            const successIds = (result.sentIds || []) as number[];
             
             if (successIds.length > 0) {
                 onSendDocuments(successIds);

@@ -467,13 +467,20 @@ setInterval(() => {
         const db = getDb(user);
         if (!db) return;
 
+        // CORREÇÃO DE FUSO HORÁRIO
+        // Cria uma data ajustada para o fuso do Brasil (UTC-3)
+        // Isso é necessário porque o input datetime-local salva a string como "2024-10-20T10:00"
+        // mas o servidor roda em UTC, onde seriam 13:00.
+        // Se usarmos UTC direto, o servidor acharia que já passou da hora e enviaria imediatamente.
         const now = new Date();
-        const nowStr = now.toISOString().slice(0, 16); // "YYYY-MM-DDTHH:mm"
+        const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+        const brazilTime = new Date(utc - (3600000 * 3)); // UTC - 3h
+        const nowStr = brazilTime.toISOString().slice(0, 16); // "YYYY-MM-DDTHH:mm"
 
         db.all("SELECT * FROM scheduled_messages WHERE active = 1 AND nextRun <= ?", [nowStr], async (err, rows) => {
             if (err || !rows || rows.length === 0) return;
 
-            console.log(`[CRON ${user}] Processando ${rows.length} agendamentos...`);
+            console.log(`[CRON ${user}] Processando ${rows.length} agendamentos... Hora Server(BRT): ${nowStr}`);
             
             // Carrega dependências do usuário
             const waWrapper = getWaClientWrapper(user);
