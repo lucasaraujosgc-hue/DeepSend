@@ -46,8 +46,24 @@ const getDb = (username) => {
         db.run(`CREATE TABLE IF NOT EXISTS user_settings (id INTEGER PRIMARY KEY CHECK (id = 1), settings TEXT)`);
         db.run(`CREATE TABLE IF NOT EXISTS scheduled_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, message TEXT, nextRun TEXT, recurrence TEXT, active INTEGER, type TEXT, channels TEXT, targetType TEXT, selectedCompanyIds TEXT, attachmentFilename TEXT, attachmentOriginalName TEXT, documentsPayload TEXT, createdBy TEXT)`);
         
-        // Migration to add documentsPayload if it doesn't exist (simplistic approach for sqlite)
-        // db.run("ALTER TABLE scheduled_messages ADD COLUMN documentsPayload TEXT", (err) => { /* ignore error if exists */ });
+        // --- MIGRATION CHECK ---
+        // Verifica se a coluna documentsPayload existe, se não, adiciona.
+        db.all("PRAGMA table_info(scheduled_messages)", [], (err, rows) => {
+            if (err) {
+                console.error("Erro ao verificar schema da tabela scheduled_messages:", err);
+                return;
+            }
+            if (rows && rows.length > 0) {
+                const hasColumn = rows.some(col => col.name === 'documentsPayload');
+                if (!hasColumn) {
+                    console.log(`[Migration ${username}] Adicionando coluna documentsPayload...`);
+                    db.run("ALTER TABLE scheduled_messages ADD COLUMN documentsPayload TEXT", (alterErr) => {
+                        if (alterErr) console.error(`[Migration ${username}] Erro ao adicionar coluna:`, alterErr);
+                        else console.log(`[Migration ${username}] Coluna documentsPayload adicionada com sucesso.`);
+                    });
+                }
+            }
+        });
     });
 
     dbInstances[username] = db;

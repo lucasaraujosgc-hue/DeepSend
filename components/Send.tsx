@@ -189,9 +189,9 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
 
           alert(`Agendamento salvo com sucesso!\n${docsToSend.length} documentos serão enviados em ${new Date(scheduleDate).toLocaleString()}.`);
           setShowScheduleModal(false);
-      } catch (e) {
+      } catch (e: any) {
           console.error(e);
-          alert("Erro ao salvar agendamento.");
+          alert(`Erro ao salvar agendamento: ${e.message}`);
       }
   }
 
