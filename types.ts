@@ -66,6 +66,7 @@ export interface ScheduledMessage {
   selectedCompanyIds?: number[];
   attachmentFilename?: string;
   attachmentOriginalName?: string;
+  documentsPayload?: string; // JSON string of Document[]
 }
 
 export interface UploadedFile {

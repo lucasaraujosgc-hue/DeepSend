@@ -122,7 +122,7 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
         });
 
         if (result.success) {
-            const successIds = (result.sentIds || []) as number[];
+            const successIds = ((result.sentIds as unknown[]) || []) as number[];
             
             if (successIds.length > 0) {
                 onSendDocuments(successIds);
@@ -153,31 +153,44 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
       
       try {
           // Extrair empresas únicas dos documentos selecionados
-          const docs = documents.filter(d => selectedDocs.includes(d.id));
-          const companyIds = [...new Set(docs.map(d => d.companyId))];
+          const docsToSend = documents
+            .filter(d => selectedDocs.includes(d.id))
+            .map(d => ({
+                id: d.id, 
+                companyId: d.companyId,
+                serverFilename: d.serverFilename || d.name, 
+                docName: d.name,
+                category: d.category,
+                competence: d.competence,
+                dueDate: d.dueDate
+            }));
+
+          const companyIds = [...new Set(docsToSend.map(d => d.companyId))];
 
           const payload: Partial<ScheduledMessage> = {
             title: subject,
-            message: message + "\n\n(Este agendamento disparará os documentos pendentes para as empresas selecionadas).",
+            message: message, // Removed the extra text
             nextRun: scheduleDate,
             recurrence: 'unico',
             active: true,
-            type: 'documents', // Special type for document batch? Or just message. For now 'message' logic in cron handles basic attachments.
-            // Complexidade: O cron atual envia 1 anexo unico. Enviar lotes de docs específicos via cron requer refatoração profunda do cron.
-            // Por enquanto, salvamos como alerta, mas o usuário deve saber que o cron atual envia MENSAGEM GENÉRICA.
-            // A implementação ideal seria o cron chamar sendDocuments.
-            // Vou salvar como mensagem genérica avisando que precisa ser manual ou implementar lógica avançada no cron.
-            // Porem, como pedido "Backend precisa de implementação cron", implementei um cron basico.
-            // Vou salvar um agendamento simples para essas empresas.
+            type: 'documents', 
             targetType: 'selected',
             channels: scheduleChannels,
-            selectedCompanyIds: companyIds
+            selectedCompanyIds: companyIds,
+            documentsPayload: JSON.stringify(docsToSend) // Send full document list to server
           };
 
           await api.saveScheduledMessage(payload);
-          alert(`Agendamento salvo! O sistema tentará enviar na data programada.`);
+          
+          // Visual Feedback: Mark as sent/scheduled in UI so they disappear from "Pending"
+          const scheduledIds = docsToSend.map(d => d.id);
+          onSendDocuments(scheduledIds);
+          setSelectedDocs([]);
+
+          alert(`Agendamento salvo com sucesso!\n${docsToSend.length} documentos serão enviados em ${new Date(scheduleDate).toLocaleString()}.`);
           setShowScheduleModal(false);
       } catch (e) {
+          console.error(e);
           alert("Erro ao salvar agendamento.");
       }
   }

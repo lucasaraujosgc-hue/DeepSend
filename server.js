@@ -44,7 +44,10 @@ const getDb = (username) => {
         db.run(`CREATE TABLE IF NOT EXISTS document_status (id INTEGER PRIMARY KEY AUTOINCREMENT, companyId INTEGER, category TEXT, competence TEXT, status TEXT, UNIQUE(companyId, category, competence))`);
         db.run(`CREATE TABLE IF NOT EXISTS sent_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, companyName TEXT, docName TEXT, category TEXT, sentAt TEXT, channels TEXT, status TEXT)`);
         db.run(`CREATE TABLE IF NOT EXISTS user_settings (id INTEGER PRIMARY KEY CHECK (id = 1), settings TEXT)`);
-        db.run(`CREATE TABLE IF NOT EXISTS scheduled_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, message TEXT, nextRun TEXT, recurrence TEXT, active INTEGER, type TEXT, channels TEXT, targetType TEXT, selectedCompanyIds TEXT, attachmentFilename TEXT, attachmentOriginalName TEXT, createdBy TEXT)`);
+        db.run(`CREATE TABLE IF NOT EXISTS scheduled_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, message TEXT, nextRun TEXT, recurrence TEXT, active INTEGER, type TEXT, channels TEXT, targetType TEXT, selectedCompanyIds TEXT, attachmentFilename TEXT, attachmentOriginalName TEXT, documentsPayload TEXT, createdBy TEXT)`);
+        
+        // Migration to add documentsPayload if it doesn't exist (simplistic approach for sqlite)
+        // db.run("ALTER TABLE scheduled_messages ADD COLUMN documentsPayload TEXT", (err) => { /* ignore error if exists */ });
     });
 
     dbInstances[username] = db;
@@ -295,24 +298,25 @@ app.get('/api/scheduled', (req, res) => {
             ...row, 
             active: !!row.active, 
             channels: JSON.parse(row.channels || '{}'),
-            selectedCompanyIds: row.selectedCompanyIds ? JSON.parse(row.selectedCompanyIds) : []
+            selectedCompanyIds: row.selectedCompanyIds ? JSON.parse(row.selectedCompanyIds) : [],
+            documentsPayload: row.documentsPayload || null
         })) || []);
     });
 });
 
 app.post('/api/scheduled', (req, res) => {
-    const { id, title, message, nextRun, recurrence, active, type, channels, targetType, selectedCompanyIds, attachmentFilename, attachmentOriginalName } = req.body;
+    const { id, title, message, nextRun, recurrence, active, type, channels, targetType, selectedCompanyIds, attachmentFilename, attachmentOriginalName, documentsPayload } = req.body;
     const db = getDb(req.user);
     const channelsStr = JSON.stringify(channels);
     const companyIdsStr = JSON.stringify(selectedCompanyIds || []);
 
     if (id) {
-        db.run(`UPDATE scheduled_messages SET title=?, message=?, nextRun=?, recurrence=?, active=?, type=?, channels=?, targetType=?, selectedCompanyIds=?, attachmentFilename=?, attachmentOriginalName=? WHERE id=?`,
-        [title, message, nextRun, recurrence, active ? 1 : 0, type, channelsStr, targetType, companyIdsStr, attachmentFilename, attachmentOriginalName, id],
+        db.run(`UPDATE scheduled_messages SET title=?, message=?, nextRun=?, recurrence=?, active=?, type=?, channels=?, targetType=?, selectedCompanyIds=?, attachmentFilename=?, attachmentOriginalName=?, documentsPayload=? WHERE id=?`,
+        [title, message, nextRun, recurrence, active ? 1 : 0, type, channelsStr, targetType, companyIdsStr, attachmentFilename, attachmentOriginalName, documentsPayload, id],
         function(err) { if (err) return res.status(500).json({error: err.message}); res.json({success: true, id}); });
     } else {
-        db.run(`INSERT INTO scheduled_messages (title, message, nextRun, recurrence, active, type, channels, targetType, selectedCompanyIds, attachmentFilename, attachmentOriginalName, createdBy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [title, message, nextRun, recurrence, active ? 1 : 0, type, channelsStr, targetType, companyIdsStr, attachmentFilename, attachmentOriginalName, req.user],
+        db.run(`INSERT INTO scheduled_messages (title, message, nextRun, recurrence, active, type, channels, targetType, selectedCompanyIds, attachmentFilename, attachmentOriginalName, documentsPayload, createdBy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [title, message, nextRun, recurrence, active ? 1 : 0, type, channelsStr, targetType, companyIdsStr, attachmentFilename, attachmentOriginalName, documentsPayload, req.user],
         function(err) { if (err) return res.status(500).json({error: err.message}); res.json({success: true, id: this.lastID}); });
     }
 });
@@ -468,10 +472,6 @@ setInterval(() => {
         if (!db) return;
 
         // CORREÇÃO DE FUSO HORÁRIO
-        // Cria uma data ajustada para o fuso do Brasil (UTC-3)
-        // Isso é necessário porque o input datetime-local salva a string como "2024-10-20T10:00"
-        // mas o servidor roda em UTC, onde seriam 13:00.
-        // Se usarmos UTC direto, o servidor acharia que já passou da hora e enviaria imediatamente.
         const now = new Date();
         const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
         const brazilTime = new Date(utc - (3600000 * 3)); // UTC - 3h
@@ -508,36 +508,97 @@ setInterval(() => {
                     // Nota: para 'normal' estamos pegando tudo que não é MEI
                     targetCompanies = await new Promise(resolve => db.all(`SELECT * FROM companies WHERE type ${operator} 'MEI'`, (e, r) => resolve(r || [])));
                 }
+                
+                // Parse documentsPayload if exists
+                let specificDocs = [];
+                if (msg.documentsPayload) {
+                    try { specificDocs = JSON.parse(msg.documentsPayload); } catch(e) {}
+                }
 
                 // Dispara envios
                 for (const company of targetCompanies) {
+                    
+                    // Prepara anexos (Genéricos ou Específicos)
+                    let attachmentsToSend = [];
+                    let finalBody = msg.message;
+                    let companySpecificDocs = [];
+
+                    if (specificDocs.length > 0) {
+                        // Modo "Lote de Documentos": Filtra docs para ESTA empresa
+                        companySpecificDocs = specificDocs.filter(d => d.companyId === company.id);
+                        if (companySpecificDocs.length === 0) continue; // Pula se não tem doc para essa empresa no lote
+                        
+                        for (const doc of companySpecificDocs) {
+                             if (doc.serverFilename) {
+                                 const p = path.join(UPLOADS_DIR, doc.serverFilename);
+                                 if (fs.existsSync(p)) {
+                                     attachmentsToSend.push({ filename: doc.docName, path: p, contentType: 'application/pdf', docData: doc });
+                                 }
+                             }
+                        }
+                    } else if (msg.attachmentFilename) {
+                        // Modo "Mensagem Genérica": Anexo único para todos
+                        const p = path.join(UPLOADS_DIR, msg.attachmentFilename);
+                        if (fs.existsSync(p)) {
+                            attachmentsToSend.push({ filename: msg.attachmentOriginalName, path: p, contentType: 'application/pdf' });
+                        }
+                    }
+
                     if (channels.email && company.email) {
                         try {
+                             // Se for modo Docs, usa html builder completo. Se for Msg, usa html simples
+                             const htmlContent = specificDocs.length > 0 
+                                ? buildEmailHtml(msg.message, companySpecificDocs, settings?.emailSignature)
+                                : buildEmailHtml(msg.message, [], settings?.emailSignature);
+
                              await emailTransporter.sendMail({
                                 from: process.env.EMAIL_USER,
                                 to: company.email,
                                 subject: msg.title,
-                                html: buildEmailHtml(msg.message, [], settings?.emailSignature),
-                                attachments: msg.attachmentFilename ? [{
-                                    filename: msg.attachmentOriginalName,
-                                    path: path.join(UPLOADS_DIR, msg.attachmentFilename)
-                                }] : []
+                                html: htmlContent,
+                                attachments: attachmentsToSend.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
                             });
                         } catch(e) { console.error(`[CRON] Erro email ${company.name}`, e); }
                     }
+
                     if (channels.whatsapp && company.whatsapp && clientReady) {
                         try {
                             let number = company.whatsapp.replace(/\D/g, '');
                             if (!number.startsWith('55')) number = '55' + number;
                             const chatId = `${number}@c.us`;
                             
-                            await waWrapper.client.sendMessage(chatId, `*${msg.title}*\n\n${msg.message}\n\n${settings?.whatsappTemplate || ''}`);
-                            if (msg.attachmentFilename) {
-                                const media = MessageMedia.fromFilePath(path.join(UPLOADS_DIR, msg.attachmentFilename));
-                                media.filename = msg.attachmentOriginalName;
+                            // Monta mensagem zap
+                            let waBody = `*${msg.title}*\n\n${msg.message}`;
+                            if (specificDocs.length > 0) {
+                                const listaArquivos = attachmentsToSend.map(att => 
+                                    `• ${att.docData?.docName || att.filename}`
+                                ).join('\n');
+                                waBody += `\n\n*Arquivos enviados:*\n${listaArquivos}`;
+                            }
+                            waBody += `\n\n${settings?.whatsappTemplate || ''}`;
+
+                            await waWrapper.client.sendMessage(chatId, waBody);
+                            
+                            for (const att of attachmentsToSend) {
+                                const media = MessageMedia.fromFilePath(att.path);
+                                media.filename = att.filename;
                                 await waWrapper.client.sendMessage(chatId, media);
+                                await new Promise(r => setTimeout(r, 1000)); // Throttle
                             }
                         } catch(e) { console.error(`[CRON] Erro zap ${company.name}`, e); }
+                    }
+                    
+                    // Se enviou documentos específicos, registra logs e status
+                    if (companySpecificDocs.length > 0) {
+                        for (const doc of companySpecificDocs) {
+                            if (doc.category) {
+                                db.run(`INSERT INTO sent_logs (companyName, docName, category, sentAt, channels, status) VALUES (?, ?, ?, datetime('now', 'localtime'), ?, 'success')`, 
+                                    [company.name, doc.docName, doc.category, JSON.stringify(channels)]);
+                                
+                                db.run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, 'sent') ON CONFLICT(companyId, category, competence) DO UPDATE SET status='sent'`, 
+                                    [doc.companyId, doc.category, doc.competence]);
+                            }
+                        }
                     }
                 }
 
