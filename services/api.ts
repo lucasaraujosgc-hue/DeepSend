@@ -70,6 +70,12 @@ export const api = {
       return handleResponse(res);
   },
 
+  // Trigger Daily Summary Manually
+  triggerDailySummary: async (): Promise<void> => {
+      const res = await fetch(`${API_URL}/trigger-daily-summary`, { method: 'POST', headers: getAuthHeader() });
+      return handleResponse(res);
+  },
+
   // Companies
   getCompanies: async (): Promise<Company[]> => {
     const res = await fetch(`${API_URL}/companies`, { headers: getAuthHeader() });

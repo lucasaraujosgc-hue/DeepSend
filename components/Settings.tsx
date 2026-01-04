@@ -1,8 +1,9 @@
 
 import React, { useState } from 'react';
-import { Save, User, Mail, MessageCircle, FileText, Check, LayoutTemplate, Link as LinkIcon, Plus, Trash, Clock, CalendarDays, Star, Tag, Smartphone } from 'lucide-react';
+import { Save, User, Mail, MessageCircle, FileText, Check, LayoutTemplate, Link as LinkIcon, Plus, Trash, Clock, CalendarDays, Star, Tag, Smartphone, Send, Loader2 } from 'lucide-react';
 import { UserSettings, CategoryRule } from '../types';
 import { DOCUMENT_CATEGORIES } from '../constants';
+import { api } from '../services/api';
 
 interface SettingsProps {
   settings: UserSettings;
@@ -15,6 +16,7 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [newKeyword, setNewKeyword] = useState('');
   const [newCustomCategory, setNewCustomCategory] = useState('');
+  const [loadingTest, setLoadingTest] = useState(false);
   
   // Combina categorias padrão com as customizadas para os dropdowns
   const allCategories = [...DOCUMENT_CATEGORIES, ...(formData.customCategories || [])];
@@ -107,6 +109,25 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
         }
       }
     }));
+  };
+
+  const handleTestDaily = async () => {
+      if (!formData.dailySummaryNumber) {
+          alert("Salve um número de WhatsApp primeiro.");
+          return;
+      }
+      
+      setLoadingTest(true);
+      try {
+          // Salva antes de testar para garantir que o backend tenha os dados atualizados
+          onSave(formData);
+          await api.triggerDailySummary();
+          alert("Disparo solicitado! Verifique seu WhatsApp.");
+      } catch (e: any) {
+          alert("Erro ao disparar resumo: " + e.message);
+      } finally {
+          setLoadingTest(false);
+      }
   };
 
   return (
@@ -480,7 +501,7 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
                               value={formData.dailySummaryNumber || ''}
                               onChange={(e) => setFormData({...formData, dailySummaryNumber: e.target.value.replace(/\D/g, '')})}
                           />
-                          <p className="text-xs text-gray-500 mt-1">Apenas números. O sistema enviará para este número.</p>
+                          <p className="text-xs text-gray-500 mt-1">Apenas números. O sistema enviará exclusivamente para este número.</p>
                       </div>
 
                       <div>
@@ -494,11 +515,20 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
                           <p className="text-xs text-gray-500 mt-1">O resumo será enviado de Segunda a Sexta neste horário.</p>
                       </div>
 
-                      <div className="bg-blue-50 p-4 rounded text-sm text-blue-800 border border-blue-100">
+                      <div className="bg-blue-50 p-4 rounded text-sm text-blue-800 border border-blue-100 mb-4">
                           <strong>Como funciona:</strong><br/>
                           No horário definido, o sistema listará todas as tarefas <strong>Pendentes</strong> e <strong>Em Andamento</strong>, 
                           ordenadas por prioridade (Alta {'>'} Média {'>'} Baixa).
                       </div>
+
+                      <button 
+                        onClick={handleTestDaily}
+                        disabled={loadingTest}
+                        className="w-full flex items-center justify-center gap-2 bg-green-600 text-white px-4 py-3 rounded-lg hover:bg-green-700 shadow-lg shadow-green-500/20 font-medium transition-all disabled:opacity-70"
+                      >
+                          {loadingTest ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                          Disparar Resumo Agora (Teste)
+                      </button>
                   </div>
               </div>
           )}

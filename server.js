@@ -131,6 +131,91 @@ const getWaClientWrapper = (username) => {
     return waClients[username];
 };
 
+// --- LOGIC: Send Daily Summary Helper ---
+const sendDailySummaryToUser = async (user) => {
+    const db = getDb(user);
+    if (!db) return;
+
+    const waWrapper = getWaClientWrapper(user);
+    if (waWrapper.status !== 'connected') {
+        console.log(`[Summary ${user}] WhatsApp não conectado. Abortando.`);
+        return { success: false, message: 'WhatsApp desconectado' };
+    }
+
+    return new Promise((resolve, reject) => {
+        db.get("SELECT settings FROM user_settings WHERE id = 1", (e, r) => {
+            if (e || !r) {
+                resolve({ success: false, message: 'Configurações não encontradas' });
+                return;
+            }
+            
+            const settings = JSON.parse(r.settings);
+            if (!settings.dailySummaryNumber) {
+                resolve({ success: false, message: 'Número para resumo não configurado' });
+                return;
+            }
+
+            // Busca tarefas pendentes
+            db.all(`SELECT * FROM tasks WHERE status != 'concluida'`, [], async (err, tasks) => {
+                if (err) {
+                    resolve({ success: false, message: 'Erro ao buscar tarefas' });
+                    return;
+                }
+
+                if (!tasks || tasks.length === 0) {
+                    // Opcional: Enviar msg "Sem tarefas pendentes"
+                    resolve({ success: true, message: 'Nenhuma tarefa pendente' });
+                    return;
+                }
+
+                // Ordena por prioridade: Alta > Média > Baixa
+                const priorityMap = { 'alta': 1, 'media': 2, 'baixa': 3 };
+                const sortedTasks = tasks.sort((a, b) => {
+                    const pA = priorityMap[a.priority] || 99;
+                    const pB = priorityMap[b.priority] || 99;
+                    return pA - pB;
+                });
+
+                // Monta a mensagem
+                let message = `*📅 Resumo Diário de Tarefas*\n\n`;
+                
+                // Contadores
+                const total = sortedTasks.length;
+                const high = sortedTasks.filter(t => t.priority === 'alta').length;
+                
+                message += `Você tem *${total}* tarefas pendentes (${high} urgentes).\n\n`;
+
+                sortedTasks.forEach(task => {
+                    let icon = '🔵'; // Baixa/Default
+                    if (task.priority === 'media') icon = '🟡';
+                    if (task.priority === 'alta') icon = '🔴';
+                    
+                    let statusText = '';
+                    if (task.status === 'pendente') statusText = '(Pendente)';
+                    if (task.status === 'em_andamento') statusText = '(Em Andamento)';
+
+                    message += `${icon} *${task.title}* ${statusText}\n`;
+                });
+
+                message += `\n_Gerado automaticamente pelo Contábil Manager Pro_`;
+
+                // Envia
+                try {
+                    let number = settings.dailySummaryNumber.replace(/\D/g, '');
+                    if (!number.startsWith('55')) number = '55' + number;
+                    const chatId = `${number}@c.us`;
+                    await waWrapper.client.sendMessage(chatId, message);
+                    console.log(`[Summary ${user}] Resumo diário enviado com sucesso para ${number}.`);
+                    resolve({ success: true, message: 'Enviado com sucesso' });
+                } catch (sendErr) {
+                    console.error(`[Summary ${user}] Erro ao enviar:`, sendErr);
+                    resolve({ success: false, message: 'Erro no envio do WhatsApp: ' + sendErr.message });
+                }
+            });
+        });
+    });
+};
+
 // --- Middleware de Autenticação ---
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -237,6 +322,19 @@ app.post('/api/settings', (req, res) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json({ success: true });
     });
+});
+
+app.post('/api/trigger-daily-summary', async (req, res) => {
+    try {
+        const result = await sendDailySummaryToUser(req.user);
+        if (result && result.success) {
+            res.json({ success: true });
+        } else {
+            res.status(400).json({ error: result ? result.message : "Falha desconhecida" });
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 app.get('/api/companies', (req, res) => { 
@@ -670,62 +768,7 @@ setInterval(() => {
             // Simples verificação de horário (Executa apenas no minuto exato)
             if (settings.dailySummaryTime === currentHHMM) {
                 console.log(`[CRON ${user}] Iniciando resumo diário de tarefas para ${settings.dailySummaryNumber}`);
-                
-                const waWrapper = getWaClientWrapper(user);
-                if (waWrapper.status !== 'connected') {
-                    console.log(`[CRON ${user}] WhatsApp não conectado. Abortando resumo.`);
-                    return;
-                }
-
-                // Busca tarefas pendentes
-                db.all(`SELECT * FROM tasks WHERE status != 'concluida'`, [], async (err, tasks) => {
-                    if (err || !tasks || tasks.length === 0) {
-                        // Opcional: Mandar msg dizendo que não tem nada pendente
-                        return;
-                    }
-
-                    // Ordena por prioridade: Alta > Média > Baixa
-                    const priorityMap = { 'alta': 1, 'media': 2, 'baixa': 3 };
-                    const sortedTasks = tasks.sort((a, b) => {
-                        const pA = priorityMap[a.priority] || 99;
-                        const pB = priorityMap[b.priority] || 99;
-                        return pA - pB;
-                    });
-
-                    // Monta a mensagem
-                    let message = `*📅 Resumo Diário de Tarefas*\n\n`;
-                    
-                    // Contadores
-                    const total = sortedTasks.length;
-                    const high = sortedTasks.filter(t => t.priority === 'alta').length;
-                    
-                    message += `Você tem *${total}* tarefas pendentes (${high} urgentes).\n\n`;
-
-                    sortedTasks.forEach(task => {
-                        let icon = '🔵'; // Baixa/Default
-                        if (task.priority === 'media') icon = '🟡';
-                        if (task.priority === 'alta') icon = '🔴';
-                        
-                        let statusText = '';
-                        if (task.status === 'pendente') statusText = '(Pendente)';
-                        if (task.status === 'em_andamento') statusText = '(Em Andamento)';
-
-                        message += `${icon} *${task.title}* ${statusText}\n`;
-                    });
-
-                    message += `\n_Gerado automaticamente pelo Contábil Manager Pro_`;
-
-                    // Envia
-                    try {
-                        let number = settings.dailySummaryNumber.replace(/\D/g, '');
-                        if (!number.startsWith('55')) number = '55' + number;
-                        const chatId = `${number}@c.us`;
-                        await waWrapper.client.sendMessage(chatId, message);
-                        console.log(`[CRON ${user}] Resumo diário enviado com sucesso.`);
-                    } catch (sendErr) {
-                        console.error(`[CRON ${user}] Erro ao enviar resumo diário:`, sendErr);
-                    }
-                });
+                sendDailySummaryToUser(user);
             }
         });
     });
