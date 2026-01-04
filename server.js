@@ -155,8 +155,15 @@ const sendDailySummaryToUser = async (user) => {
                 return;
             }
 
-            // Busca tarefas pendentes
-            db.all(`SELECT * FROM tasks WHERE status != 'concluida'`, [], async (err, tasks) => {
+            // Busca tarefas pendentes e faz JOIN com empresas para pegar o nome
+            const sql = `
+                SELECT t.*, c.name as companyName 
+                FROM tasks t 
+                LEFT JOIN companies c ON t.companyId = c.id 
+                WHERE t.status != 'concluida'
+            `;
+
+            db.all(sql, [], async (err, tasks) => {
                 if (err) {
                     resolve({ success: false, message: 'Erro ao buscar tarefas' });
                     return;
@@ -195,9 +202,24 @@ const sendDailySummaryToUser = async (user) => {
                     if (task.status === 'em_andamento') statusText = '(Em Andamento)';
 
                     message += `${icon} *${task.title}* ${statusText}\n`;
+                    
+                    if (task.companyName) {
+                        message += `   🏢 ${task.companyName}\n`;
+                    }
+                    
+                    if (task.dueDate) {
+                        // Formata data de YYYY-MM-DD para DD/MM/YYYY se necessário
+                        let dateStr = task.dueDate;
+                        if (dateStr.includes('-')) {
+                            const parts = dateStr.split('-');
+                            if (parts.length === 3) dateStr = `${parts[2]}/${parts[1]}/${parts[0]}`;
+                        }
+                        message += `   📅 Vence: ${dateStr}\n`;
+                    }
+                    message += `\n`; // Espaçamento entre tarefas
                 });
 
-                message += `\n_Gerado automaticamente pelo Contábil Manager Pro_`;
+                message += `_Gerado automaticamente pelo Contábil Manager Pro_`;
 
                 // Envia
                 try {
