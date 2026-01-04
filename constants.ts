@@ -35,6 +35,7 @@ Lucas Araújo`,
     'Honorários',
     'Notas Fiscais'
   ],
+  customCategories: [], // Nova lista vazia por padrão
   categoryKeywords: {
     // Atualizado com base nos PDFs reais
     'FGTS': ['fgts', 'gfd', 'fundo de garantia', 'guia do fgts', 'fgts digital'],
@@ -55,5 +56,7 @@ Lucas Araújo`,
     'Contracheque': { day: 5, rule: 'quinto_dia_util' },
     'Parcelamento': { day: 0, rule: 'ultimo_dia_util' },
     'Notas Fiscais': { day: 1, rule: 'fixo' }, 
-  }
+  },
+  dailySummaryNumber: '',
+  dailySummaryTime: '08:00'
 };

@@ -478,8 +478,7 @@ app.get(/.*/, (req, res) => {
     if (!req.path.startsWith('/api')) res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-// --- CRON JOB SIMULATION ---
-// Verifica a cada minuto se há mensagens agendadas para enviar
+// --- CRON JOB: SCHEDULED MESSAGES ---
 setInterval(() => {
     const envUsers = (process.env.USERS || '').split(',');
     // Itera por todos os usuários (dbs)
@@ -583,14 +582,22 @@ setInterval(() => {
                             if (!number.startsWith('55')) number = '55' + number;
                             const chatId = `${number}@c.us`;
                             
-                            // Monta mensagem zap
+                            // Monta mensagem zap (Formatação Rica Unificada)
                             let waBody = `*${msg.title}*\n\n${msg.message}`;
+
                             if (specificDocs.length > 0) {
+                                // Se for envio de documentos específicos, formata igual ao envio direto
+                                waBody = `*📄 Olá!* \n\n${msg.message}\n\n*Arquivos enviados:*`;
                                 const listaArquivos = attachmentsToSend.map(att => 
-                                    `• ${att.docData?.docName || att.filename}`
+                                    `• ${att.docData?.docName || att.filename} (${att.docData?.category || 'Anexo'}, Venc: ${att.docData?.dueDate || 'N/A'})`
                                 ).join('\n');
-                                waBody += `\n\n*Arquivos enviados:*\n${listaArquivos}`;
+                                waBody += `\n${listaArquivos}`;
+                            } else if (attachmentsToSend.length > 0) {
+                                // Se for anexo genérico
+                                waBody += `\n\n*Arquivo enviado:* ${attachmentsToSend[0].filename}`;
                             }
+                            
+                            // Adiciona assinatura
                             waBody += `\n\n${settings?.whatsappTemplate || ''}`;
 
                             await waWrapper.client.sendMessage(chatId, waBody);
@@ -631,6 +638,94 @@ setInterval(() => {
                     const nextRunStr = nextDate.toISOString().slice(0, 16);
                     db.run("UPDATE scheduled_messages SET nextRun = ? WHERE id = ?", [nextRunStr, msg.id]);
                 }
+            }
+        });
+    });
+}, 60000); // Check every minute
+
+// --- CRON JOB: DAILY TASK SUMMARY ---
+setInterval(() => {
+    const envUsers = (process.env.USERS || '').split(',');
+    envUsers.forEach(user => {
+        const db = getDb(user);
+        if (!db) return;
+
+        const now = new Date();
+        const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+        const brazilTime = new Date(utc - (3600000 * 3));
+        
+        // Verifica se é Segunda a Sexta (1=Seg, 5=Sex)
+        const dayOfWeek = brazilTime.getDay();
+        if (dayOfWeek < 1 || dayOfWeek > 5) return;
+
+        const currentHHMM = brazilTime.toISOString().slice(11, 16); // "HH:mm"
+
+        db.get("SELECT settings FROM user_settings WHERE id = 1", (e, r) => {
+            if (e || !r) return;
+            const settings = JSON.parse(r.settings);
+            
+            // Verifica se está configurado e se é o horário exato
+            if (!settings.dailySummaryNumber || !settings.dailySummaryTime) return;
+            
+            // Simples verificação de horário (Executa apenas no minuto exato)
+            if (settings.dailySummaryTime === currentHHMM) {
+                console.log(`[CRON ${user}] Iniciando resumo diário de tarefas para ${settings.dailySummaryNumber}`);
+                
+                const waWrapper = getWaClientWrapper(user);
+                if (waWrapper.status !== 'connected') {
+                    console.log(`[CRON ${user}] WhatsApp não conectado. Abortando resumo.`);
+                    return;
+                }
+
+                // Busca tarefas pendentes
+                db.all(`SELECT * FROM tasks WHERE status != 'concluida'`, [], async (err, tasks) => {
+                    if (err || !tasks || tasks.length === 0) {
+                        // Opcional: Mandar msg dizendo que não tem nada pendente
+                        return;
+                    }
+
+                    // Ordena por prioridade: Alta > Média > Baixa
+                    const priorityMap = { 'alta': 1, 'media': 2, 'baixa': 3 };
+                    const sortedTasks = tasks.sort((a, b) => {
+                        const pA = priorityMap[a.priority] || 99;
+                        const pB = priorityMap[b.priority] || 99;
+                        return pA - pB;
+                    });
+
+                    // Monta a mensagem
+                    let message = `*📅 Resumo Diário de Tarefas*\n\n`;
+                    
+                    // Contadores
+                    const total = sortedTasks.length;
+                    const high = sortedTasks.filter(t => t.priority === 'alta').length;
+                    
+                    message += `Você tem *${total}* tarefas pendentes (${high} urgentes).\n\n`;
+
+                    sortedTasks.forEach(task => {
+                        let icon = '🔵'; // Baixa/Default
+                        if (task.priority === 'media') icon = '🟡';
+                        if (task.priority === 'alta') icon = '🔴';
+                        
+                        let statusText = '';
+                        if (task.status === 'pendente') statusText = '(Pendente)';
+                        if (task.status === 'em_andamento') statusText = '(Em Andamento)';
+
+                        message += `${icon} *${task.title}* ${statusText}\n`;
+                    });
+
+                    message += `\n_Gerado automaticamente pelo Contábil Manager Pro_`;
+
+                    // Envia
+                    try {
+                        let number = settings.dailySummaryNumber.replace(/\D/g, '');
+                        if (!number.startsWith('55')) number = '55' + number;
+                        const chatId = `${number}@c.us`;
+                        await waWrapper.client.sendMessage(chatId, message);
+                        console.log(`[CRON ${user}] Resumo diário enviado com sucesso.`);
+                    } catch (sendErr) {
+                        console.error(`[CRON ${user}] Erro ao enviar resumo diário:`, sendErr);
+                    }
+                });
             }
         });
     });

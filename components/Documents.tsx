@@ -35,7 +35,6 @@ const Documents: React.FC<DocumentsProps> = ({
 }) => {
   const getInitialCompetence = () => {
     const now = new Date();
-    // Se for dia 15 ou antes, provavelmente estamos trabalhando na competência do mês anterior
     if (now.getDate() <= 15) {
         now.setMonth(now.getMonth() - 1);
     }
@@ -71,6 +70,9 @@ const Documents: React.FC<DocumentsProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Combine Default + Custom Categories
+  const allCategories = [...DOCUMENT_CATEGORIES, ...(userSettings.customCategories || [])];
+
   const fetchData = async () => {
       setLoading(true);
       try {
@@ -93,9 +95,8 @@ const Documents: React.FC<DocumentsProps> = ({
 
   const visibleMatrixCategories = userSettings.visibleDocumentCategories.length > 0 
     ? userSettings.visibleDocumentCategories 
-    : DOCUMENT_CATEGORIES.slice(0, 8);
+    : allCategories.slice(0, 8);
 
-  // Helper to change competence via arrows
   const changeCompetence = (current: string, delta: number, setter: (val: string) => void) => {
       if (!current.includes('/')) return;
       const [m, y] = current.split('/').map(Number);
@@ -143,8 +144,6 @@ const Documents: React.FC<DocumentsProps> = ({
 
       for (const file of fileList) {
           let pdfText = "";
-
-          // 1. Extração (Sem julgamento de valor)
           if (file.name.toLowerCase().endsWith('.pdf')) {
               try {
                 pdfText = await extractTextFromPDF(file);
@@ -152,37 +151,23 @@ const Documents: React.FC<DocumentsProps> = ({
                 console.warn("PDF Read error", e); 
               }
           }
-
-          // LOG PARA DEBUG
           console.log(`--- Analisando: ${file.name} ---`);
-          
-          // 2. NORMALIZAÇÃO UNIFICADA (Igual ao Python)
           const textForAnalysis = removeAccents((pdfText + " " + file.name).toLowerCase());
           
-          // 3. Identificação da Empresa
           let detectedCompanyId: number | null = null;
-          
           if (processingCompanyId) {
               detectedCompanyId = Number(processingCompanyId);
           } else {
-              // Identifica usando o texto "rico" normalizado
               const company = identifyCompany(textForAnalysis, companies);
-              if (company) {
-                  console.log(`✅ Empresa identificada: ${company.name} (CNPJ: ${company.docNumber})`);
-                  detectedCompanyId = company.id;
-              } else {
-                  console.warn(`❌ Empresa NÃO identificada. Texto analisado (primeiros 100 chars): ${textForAnalysis.substring(0, 100)}...`);
-              }
+              if (company) detectedCompanyId = company.id;
           }
 
-          // 4. Identificação da Categoria
           let detectedCategory = '';
           if (processingCategoryFilter) {
               detectedCategory = processingCategoryFilter;
           } else {
               const category = identifyCategory(textForAnalysis, userSettings.categoryKeywords, userSettings.priorityCategories);
               detectedCategory = category ?? 'Outros';
-              console.log(`Categoria: ${detectedCategory}`);
           }
 
           tempFiles.push({
@@ -228,34 +213,23 @@ const Documents: React.FC<DocumentsProps> = ({
             const file = new File([blob], simpleName, { type });
 
             let pdfText = "";
-
             if (simpleName.toLowerCase().endsWith('.pdf')) {
                  try {
                      pdfText = await extractTextFromPDF(file);
-                 } catch(e) {
-                     console.warn("Zip PDF Read error", e);
-                 }
+                 } catch(e) { console.warn("Zip PDF Read error", e); }
             }
 
             console.log(`--- Analisando ZIP item: ${simpleName} ---`);
-
             const textForAnalysis = removeAccents((pdfText + " " + simpleName).toLowerCase());
 
-            // 3. Identificação Empresa
             let detectedCompanyId: number | null = null;
             if (processingCompanyId) {
                 detectedCompanyId = Number(processingCompanyId);
             } else {
                 const company = identifyCompany(textForAnalysis, companies);
-                if (company) {
-                    console.log(`✅ Empresa: ${company.name}`);
-                    detectedCompanyId = company.id;
-                } else {
-                    console.warn(`❌ Empresa não encontrada no ZIP.`);
-                }
+                if (company) detectedCompanyId = company.id;
             }
 
-            // 4. Identificação Categoria
             let detectedCategory = '';
             if (processingCategoryFilter) {
                 detectedCategory = processingCategoryFilter;
@@ -287,7 +261,6 @@ const Documents: React.FC<DocumentsProps> = ({
       }
   };
 
-  // Update preview file data
   const updatePreview = (id: string, field: 'detectedCompanyId' | 'detectedCategory', value: any) => {
       setPreviewFiles(prev => prev.map(f => f.id === id ? { ...f, [field]: value } : f));
   };
@@ -299,18 +272,13 @@ const Documents: React.FC<DocumentsProps> = ({
   const confirmProcessing = async () => {
       setIsUploadingConfirmed(true);
       const calculatedDates = calcularTodosVencimentos(processingCompetence, userSettings.categoryRules);
-      
       let processedCount = 0;
 
       for (const item of previewFiles) {
-          // Permite upload mesmo sem categoria (vai como Outros), mas exige Empresa
           if (!item.detectedCompanyId) continue;
-
           const category = item.detectedCategory || 'Outros';
-
           try {
               const uploadRes = await api.uploadFile(item.file);
-              
               const uploadedFile: UploadedFile = {
                   name: item.fileName,
                   size: item.size,
@@ -319,12 +287,9 @@ const Documents: React.FC<DocumentsProps> = ({
                   file: item.file,
                   serverFilename: uploadRes.filename
               };
-
               onUploadSuccess([uploadedFile], item.detectedCompanyId, processingCompetence);
               processedCount++;
-          } catch (e) {
-              console.error(`Falha upload ${item.fileName}`, e);
-          }
+          } catch (e) { console.error(`Falha upload ${item.fileName}`, e); }
       }
 
       setIsUploadingConfirmed(false);
@@ -334,20 +299,10 @@ const Documents: React.FC<DocumentsProps> = ({
       setLocalPath('');
   };
 
-
-  // --- Matrix Logic & Filters ---
   const getStatus = (companyId: number, category: string) => {
-      const dbStatus = dbStatuses.find(s => 
-          s.companyId === companyId && 
-          s.category === category && 
-          s.competence === activeCompetence
-      );
+      const dbStatus = dbStatuses.find(s => s.companyId === companyId && s.category === category && s.competence === activeCompetence);
       if (dbStatus) return dbStatus.status;
-      const doc = initialDocuments.find(d => 
-        d.companyId === companyId && 
-        d.category === category && 
-        d.competence === activeCompetence
-      );
+      const doc = initialDocuments.find(d => d.companyId === companyId && d.category === category && d.competence === activeCompetence);
       return doc ? doc.status : 'pending';
   };
 
@@ -365,9 +320,7 @@ const Documents: React.FC<DocumentsProps> = ({
       try {
           await api.updateDocumentStatus(companyId, category, activeCompetence, newStatus);
           onToggleStatus(companyId, category, activeCompetence);
-      } catch (e) {
-          console.error("Failed to update status");
-      }
+      } catch (e) { console.error("Failed to update status"); }
   };
 
   const getMatrixCategories = () => {
@@ -404,332 +357,147 @@ const Documents: React.FC<DocumentsProps> = ({
 
   return (
     <div className="space-y-6">
-      
-      {/* Competence Selection Card */}
       <div className="bg-white rounded-xl shadow-sm border-0 overflow-hidden mb-4">
         <div className="bg-blue-600 text-white py-3 px-6">
-            <h5 className="mb-0 flex items-center gap-2 font-bold">
-                <CalendarCheck className="w-5 h-5" /> Verificar Documentos por Competência
-            </h5>
+            <h5 className="mb-0 flex items-center gap-2 font-bold"><CalendarCheck className="w-5 h-5" /> Verificar Documentos por Competência</h5>
         </div>
         <div className="p-6">
             <form onSubmit={handleSearchCompetence}>
                 <div className="flex flex-col md:flex-row gap-4 items-end">
                     <div className="flex-1">
-                        <label htmlFor="competencia" className="block text-sm font-semibold text-gray-700 mb-2">Selecione a competência</label>
+                        <label className="block text-sm font-semibold text-gray-700 mb-2">Selecione a competência</label>
                         <div className="flex items-center gap-2">
-                            <button 
-                                type="button"
-                                onClick={() => changeCompetence(competence, -1, setCompetence)}
-                                className="p-2 border border-gray-300 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors"
-                            >
-                                <ChevronLeft className="w-5 h-5" />
-                            </button>
+                            <button type="button" onClick={() => changeCompetence(competence, -1, setCompetence)} className="p-2 border border-gray-300 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors"><ChevronLeft className="w-5 h-5" /></button>
                             <div className="relative flex-1">
-                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
-                                    <CalendarCheck className="w-5 h-5" />
-                                </span>
-                                <input 
-                                    type="text" 
-                                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-center font-medium text-lg" 
-                                    id="competencia" 
-                                    placeholder="MM/AAAA" 
-                                    value={competence}
-                                    onChange={(e) => {
-                                        let val = e.target.value.replace(/\D/g, '');
-                                        if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 6);
-                                        setCompetence(val);
-                                    }}
-                                    required 
-                                />
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"><CalendarCheck className="w-5 h-5" /></span>
+                                <input type="text" className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 text-center font-medium text-lg" value={competence} onChange={(e) => { let val = e.target.value.replace(/\D/g, ''); if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 6); setCompetence(val); }} required />
                             </div>
-                            <button 
-                                type="button"
-                                onClick={() => changeCompetence(competence, 1, setCompetence)}
-                                className="p-2 border border-gray-300 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors"
-                            >
-                                <ChevronRight className="w-5 h-5" />
-                            </button>
+                            <button type="button" onClick={() => changeCompetence(competence, 1, setCompetence)} className="p-2 border border-gray-300 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors"><ChevronRight className="w-5 h-5" /></button>
                         </div>
                     </div>
                     <div className="flex-1 md:flex-none md:w-48">
-                        <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 font-medium">
-                            <Search className="w-4 h-4" /> Verificar
-                        </button>
+                        <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 font-medium"><Search className="w-4 h-4" /> Verificar</button>
                     </div>
                 </div>
             </form>
         </div>
       </div>
 
-      {/* Automatic Processing Card */}
       <div className="bg-white rounded-xl shadow-sm border border-blue-100 overflow-hidden">
-         <div className="bg-blue-50 p-4 border-b border-blue-100 flex items-center gap-2 text-blue-800">
-            <SettingsIcon className="w-5 h-5" />
-            <h3 className="font-bold">Processamento Automático</h3>
-        </div>
+         <div className="bg-blue-50 p-4 border-b border-blue-100 flex items-center gap-2 text-blue-800"><SettingsIcon className="w-5 h-5" /><h3 className="font-bold">Processamento Automático</h3></div>
         <div className="p-6">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-                
-                {/* Path Input */}
                 <div className="lg:col-span-1">
                     <label className="block text-sm font-semibold text-gray-700 mb-1">Arquivos (ZIP ou Múltiplos)</label>
                     <div className="input-group flex items-center border border-gray-300 rounded-lg overflow-hidden bg-white cursor-pointer hover:bg-gray-50" onClick={handleProcessClick}>
                          <span className="px-3 text-gray-400 bg-gray-50 border-r py-2"><FolderArchive className="w-4 h-4" /></span>
-                         <input 
-                            type="text" 
-                            className="flex-1 px-3 py-2 outline-none text-sm cursor-pointer"
-                            placeholder="Selecione arquivos ou ZIP..."
-                            value={localPath}
-                            readOnly
-                         />
-                         <input 
-                            type="file" 
-                            multiple
-                            accept=".zip,.rar,.pdf,.png,.jpg,.jpeg,.doc,.docx"
-                            ref={fileInputRef} 
-                            className="hidden" 
-                            onChange={handleFileSelect} 
-                        />
+                         <input type="text" className="flex-1 px-3 py-2 outline-none text-sm cursor-pointer" placeholder="Selecione arquivos ou ZIP..." value={localPath} readOnly />
+                         <input type="file" multiple accept=".zip,.rar,.pdf,.png,.jpg,.jpeg,.doc,.docx" ref={fileInputRef} className="hidden" onChange={handleFileSelect} />
                     </div>
                 </div>
-
-                {/* Processing Competence */}
                 <div>
                    <label className="block text-sm font-semibold text-gray-700 mb-1">Competência do Processamento</label>
                    <div className="flex gap-1">
-                       <button 
-                           type="button"
-                           onClick={() => changeCompetence(processingCompetence, -1, setProcessingCompetence)}
-                           className="p-2 border border-gray-300 rounded-l-lg hover:bg-gray-100"
-                       >
-                           <ChevronLeft className="w-4 h-4" />
-                       </button>
-                       <input 
-                            type="text" 
-                            className="w-full border-y border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-center"
-                            placeholder="MM/AAAA"
-                            value={processingCompetence}
-                            onChange={(e) => {
-                                let val = e.target.value.replace(/\D/g, '');
-                                if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 6);
-                                setProcessingCompetence(val);
-                            }}
-                        />
-                       <button 
-                           type="button"
-                           onClick={() => changeCompetence(processingCompetence, 1, setProcessingCompetence)}
-                           className="p-2 border border-gray-300 rounded-r-lg hover:bg-gray-100"
-                       >
-                           <ChevronRight className="w-4 h-4" />
-                       </button>
+                       <button type="button" onClick={() => changeCompetence(processingCompetence, -1, setProcessingCompetence)} className="p-2 border border-gray-300 rounded-l-lg hover:bg-gray-100"><ChevronLeft className="w-4 h-4" /></button>
+                       <input type="text" className="w-full border-y border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-center" value={processingCompetence} onChange={(e) => { let val = e.target.value.replace(/\D/g, ''); if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 6); setProcessingCompetence(val); }} />
+                       <button type="button" onClick={() => changeCompetence(processingCompetence, 1, setProcessingCompetence)} className="p-2 border border-gray-300 rounded-r-lg hover:bg-gray-100"><ChevronRight className="w-4 h-4" /></button>
                    </div>
                 </div>
-
-                {/* Filter Company */}
                 <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-1">Filtrar por Empresa</label>
-                    <select 
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                        value={processingCompanyId}
-                        onChange={(e) => setProcessingCompanyId(e.target.value)}
-                    >
+                    <select className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm" value={processingCompanyId} onChange={(e) => setProcessingCompanyId(e.target.value)}>
                         <option value="">Automático (Identificar no PDF)</option>
-                        {companies.map(c => (
-                            <option key={c.id} value={c.id}>{c.name}</option>
-                        ))}
+                        {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
                 </div>
-
-                {/* Filter Category */}
                 <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-1">Filtrar por Categoria</label>
-                    <select 
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                        value={processingCategoryFilter}
-                        onChange={(e) => setProcessingCategoryFilter(e.target.value)}
-                    >
+                    <select className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm" value={processingCategoryFilter} onChange={(e) => setProcessingCategoryFilter(e.target.value)}>
                         <option value="">Automático (Identificar no PDF)</option>
-                        {DOCUMENT_CATEGORIES.map(cat => (
-                            <option key={cat} value={cat}>{cat}</option>
-                        ))}
+                        {allCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                     </select>
                 </div>
             </div>
-            
             <div className="flex flex-col items-center">
-                 <button 
-                    onClick={handleProcessClick}
-                    disabled={processing}
-                    className="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 shadow-lg shadow-blue-500/20 font-bold flex items-center gap-2 disabled:opacity-70 transition-all"
-                 >
-                    {processing ? (
-                        <><Loader2 className="animate-spin rounded-full h-4 w-4" /> Lendo e Analisando...</>
-                    ) : (
-                        <><Play className="w-5 h-5" /> Iniciar Processamento Automático</>
-                    )}
+                 <button onClick={handleProcessClick} disabled={processing} className="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 shadow-lg shadow-blue-500/20 font-bold flex items-center gap-2 disabled:opacity-70 transition-all">
+                    {processing ? <><Loader2 className="animate-spin rounded-full h-4 w-4" /> Lendo e Analisando...</> : <><Play className="w-5 h-5" /> Iniciar Processamento Automático</>}
                  </button>
             </div>
         </div>
       </div>
 
-      {/* Preview Modal */}
       {showPreviewModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] flex flex-col animate-in zoom-in-95 duration-200">
                 <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-xl">
-                    <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                        <FilePlus className="w-5 h-5 text-blue-600" />
-                        Pré-visualização do Processamento
-                    </h3>
-                    <button onClick={() => { setShowPreviewModal(false); setPreviewFiles([]); }} className="text-gray-400 hover:text-gray-600">
-                        <X className="w-5 h-5" />
-                    </button>
+                    <h3 className="font-bold text-gray-800 flex items-center gap-2"><FilePlus className="w-5 h-5 text-blue-600" /> Pré-visualização do Processamento</h3>
+                    <button onClick={() => { setShowPreviewModal(false); setPreviewFiles([]); }} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
                 </div>
-                
-                <div className="p-4 bg-yellow-50 border-b border-yellow-100 text-sm text-yellow-800 flex items-start gap-2">
-                    <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                    <div>
-                        Verifique se a Empresa e a Categoria foram identificadas corretamente. 
-                        Arquivos sem Empresa <strong>não serão processados</strong>.
-                    </div>
-                </div>
-
+                <div className="p-4 bg-yellow-50 border-b border-yellow-100 text-sm text-yellow-800 flex items-start gap-2"><AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" /><div>Verifique se a Empresa e a Categoria foram identificadas corretamente. Arquivos sem Empresa <strong>não serão processados</strong>.</div></div>
                 <div className="flex-1 overflow-auto p-0">
                     <table className="w-full text-sm text-left">
                         <thead className="bg-gray-50 text-gray-600 sticky top-0 z-10 shadow-sm">
-                            <tr>
-                                <th className="px-4 py-3">Arquivo</th>
-                                <th className="px-4 py-3 w-1/3">Empresa Vinculada</th>
-                                <th className="px-4 py-3 w-1/4">Categoria</th>
-                                <th className="px-4 py-3 w-10 text-center">Ações</th>
-                            </tr>
+                            <tr><th className="px-4 py-3">Arquivo</th><th className="px-4 py-3 w-1/3">Empresa Vinculada</th><th className="px-4 py-3 w-1/4">Categoria</th><th className="px-4 py-3 w-10 text-center">Ações</th></tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
                             {previewFiles.map((item) => (
                                 <tr key={item.id} className="hover:bg-gray-50 group">
-                                    <td className="px-4 py-3 font-medium text-gray-700 truncate max-w-[200px]" title={item.fileName}>
-                                        {item.fileName}
-                                    </td>
+                                    <td className="px-4 py-3 font-medium text-gray-700 truncate max-w-[200px]" title={item.fileName}>{item.fileName}</td>
                                     <td className="px-4 py-3">
-                                        <select 
-                                            className={`w-full border rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-blue-500
-                                                ${!item.detectedCompanyId ? 'border-red-300 bg-red-50' : 'border-gray-300'}`}
-                                            value={item.detectedCompanyId || ''}
-                                            onChange={(e) => updatePreview(item.id, 'detectedCompanyId', Number(e.target.value) || null)}
-                                        >
+                                        <select className={`w-full border rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-blue-500 ${!item.detectedCompanyId ? 'border-red-300 bg-red-50' : 'border-gray-300'}`} value={item.detectedCompanyId || ''} onChange={(e) => updatePreview(item.id, 'detectedCompanyId', Number(e.target.value) || null)}>
                                             <option value="">-- Selecione a Empresa --</option>
-                                            {companies.map(c => (
-                                                <option key={c.id} value={c.id}>{c.name} ({c.docNumber})</option>
-                                            ))}
+                                            {companies.map(c => <option key={c.id} value={c.id}>{c.name} ({c.docNumber})</option>)}
                                         </select>
                                     </td>
                                     <td className="px-4 py-3">
-                                        <select 
-                                            className={`w-full border rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-blue-500
-                                                ${!item.detectedCategory ? 'border-yellow-300 bg-yellow-50' : 'border-gray-300'}`}
-                                            value={item.detectedCategory}
-                                            onChange={(e) => updatePreview(item.id, 'detectedCategory', e.target.value)}
-                                        >
-                                            {/* Se estiver vazio, exibe como "Outros" implícito ou selecionável */}
+                                        <select className={`w-full border rounded px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-blue-500 ${!item.detectedCategory ? 'border-yellow-300 bg-yellow-50' : 'border-gray-300'}`} value={item.detectedCategory} onChange={(e) => updatePreview(item.id, 'detectedCategory', e.target.value)}>
                                             <option value="Outros">Outros</option>
-                                            {DOCUMENT_CATEGORIES.map(cat => (
-                                                <option key={cat} value={cat}>{cat}</option>
-                                            ))}
+                                            {allCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                                         </select>
                                     </td>
                                     <td className="px-4 py-3 text-center">
-                                        <button 
-                                            onClick={() => removePreview(item.id)}
-                                            className="text-red-400 hover:text-red-600 p-1 rounded hover:bg-red-50"
-                                            title="Remover arquivo"
-                                        >
-                                            <Trash className="w-4 h-4" />
-                                        </button>
+                                        <button onClick={() => removePreview(item.id)} className="text-red-400 hover:text-red-600 p-1 rounded hover:bg-red-50" title="Remover arquivo"><Trash className="w-4 h-4" /></button>
                                     </td>
                                 </tr>
                             ))}
-                            {previewFiles.length === 0 && (
-                                <tr><td colSpan={4} className="text-center py-8 text-gray-500">Nenhum arquivo válido encontrado.</td></tr>
-                            )}
                         </tbody>
                     </table>
                 </div>
-
                 <div className="p-4 border-t border-gray-100 bg-gray-50 rounded-b-xl flex justify-between items-center">
-                    <div className="text-sm text-gray-600">
-                        Total: <strong>{previewFiles.length}</strong> arquivos.
-                    </div>
+                    <div className="text-sm text-gray-600">Total: <strong>{previewFiles.length}</strong> arquivos.</div>
                     <div className="flex gap-3">
-                        <button 
-                            onClick={() => { setShowPreviewModal(false); setPreviewFiles([]); }} 
-                            className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 font-medium"
-                        >
-                            Cancelar
-                        </button>
-                        <button 
-                            onClick={confirmProcessing}
-                            disabled={isUploadingConfirmed || previewFiles.length === 0}
-                            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold flex items-center gap-2 disabled:opacity-70"
-                        >
-                            {isUploadingConfirmed ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                            Confirmar e Processar
-                        </button>
+                        <button onClick={() => { setShowPreviewModal(false); setPreviewFiles([]); }} className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 font-medium">Cancelar</button>
+                        <button onClick={confirmProcessing} disabled={isUploadingConfirmed || previewFiles.length === 0} className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold flex items-center gap-2 disabled:opacity-70">{isUploadingConfirmed ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />} Confirmar e Processar</button>
                     </div>
                 </div>
             </div>
         </div>
       )}
 
-      {/* Document Matrix Section */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        
         <div className="p-4 border-b border-gray-100 bg-gray-50">
-           {/* Filters Bar */}
            <div className="flex justify-between items-center mb-4">
-              <h3 className="font-bold text-gray-700">
-                Matriz de Status - <span className="text-blue-600">{activeCompetence}</span>
-              </h3>
-              <div className="flex gap-3 text-sm">
-                <span className="flex items-center gap-1 text-green-600"><Check className="w-4 h-4" /> Enviado</span>
-                <span className="flex items-center gap-1 text-red-500"><X className="w-4 h-4" /> Pendente</span>
-              </div>
+              <h3 className="font-bold text-gray-700">Matriz de Status - <span className="text-blue-600">{activeCompetence}</span></h3>
+              <div className="flex gap-3 text-sm"><span className="flex items-center gap-1 text-green-600"><Check className="w-4 h-4" /> Enviado</span><span className="flex items-center gap-1 text-red-500"><X className="w-4 h-4" /> Pendente</span></div>
            </div>
-           
            <div className="flex flex-col md:flex-row gap-4 p-3 bg-white border border-gray-200 rounded-lg">
               <div className="flex-1">
                  <label className="text-xs font-semibold text-gray-500 uppercase mb-1 block">Buscar Empresa</label>
                  <div className="relative">
                     <Search className="w-4 h-4 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" />
-                    <input 
-                      type="text" 
-                      className="w-full pl-8 pr-3 py-1.5 border border-gray-300 rounded text-sm outline-none focus:ring-1 focus:ring-blue-500"
-                      placeholder="Nome da empresa..."
-                      value={matrixSearch}
-                      onChange={(e) => setMatrixSearch(e.target.value)}
-                    />
+                    <input type="text" className="w-full pl-8 pr-3 py-1.5 border border-gray-300 rounded text-sm outline-none focus:ring-1 focus:ring-blue-500" placeholder="Nome da empresa..." value={matrixSearch} onChange={(e) => setMatrixSearch(e.target.value)} />
                  </div>
               </div>
               <div className="flex-1">
                  <label className="text-xs font-semibold text-gray-500 uppercase mb-1 block">Filtrar Categoria</label>
-                 <select 
-                   className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none"
-                   value={matrixCategoryFilter}
-                   onChange={(e) => setMatrixCategoryFilter(e.target.value)}
-                 >
+                 <select className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none" value={matrixCategoryFilter} onChange={(e) => setMatrixCategoryFilter(e.target.value)}>
                    <option value="all">Todas as Categorias</option>
-                   {visibleMatrixCategories.map(cat => (
-                     <option key={cat} value={cat}>{cat}</option>
-                   ))}
+                   {visibleMatrixCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                  </select>
               </div>
               <div className="flex-1">
                  <label className="text-xs font-semibold text-gray-500 uppercase mb-1 block">Filtrar Status</label>
-                 <select 
-                   className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none"
-                   value={matrixStatusFilter}
-                   onChange={(e) => setMatrixStatusFilter(e.target.value as any)}
-                 >
+                 <select className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm outline-none" value={matrixStatusFilter} onChange={(e) => setMatrixStatusFilter(e.target.value as any)}>
                    <option value="all">Todos</option>
                    <option value="pending">Pendente (Exibir se houver)</option>
                    <option value="sent">Enviado (Exibir se houver)</option>
@@ -737,7 +505,6 @@ const Documents: React.FC<DocumentsProps> = ({
               </div>
            </div>
         </div>
-        
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -752,44 +519,25 @@ const Documents: React.FC<DocumentsProps> = ({
             <tbody className="divide-y divide-gray-100">
               {getMatrixCompanies().map((company) => (
                 <tr key={company.id} className="hover:bg-gray-50 group">
-                  <td className="px-6 py-4 font-medium text-gray-900 bg-white group-hover:bg-gray-50 sticky left-0 shadow-sm">
-                    {company.name}
-                  </td>
+                  <td className="px-6 py-4 font-medium text-gray-900 bg-white group-hover:bg-gray-50 sticky left-0 shadow-sm">{company.name}</td>
                   {getMatrixCategories().map((cat) => {
                      const status = getStatus(company.id, cat);
                      const isSent = status === 'sent';
                      return (
                       <td key={cat} className="px-4 py-4 text-center">
-                        <button 
-                            onClick={() => handleToggleStatusLocal(company.id, cat)}
-                            className={`w-8 h-8 rounded-full inline-flex items-center justify-center transition-all duration-200 cursor-pointer
-                            ${isSent 
-                                ? 'bg-green-100 text-green-600 hover:bg-green-200 hover:scale-110' 
-                                : 'bg-red-50 text-red-500 hover:bg-red-100 hover:scale-110'}`}
-                            title={isSent ? 'Clique para marcar como Pendente' : 'Clique para marcar como Enviado'}
-                        >
+                        <button onClick={() => handleToggleStatusLocal(company.id, cat)} className={`w-8 h-8 rounded-full inline-flex items-center justify-center transition-all duration-200 cursor-pointer ${isSent ? 'bg-green-100 text-green-600 hover:bg-green-200 hover:scale-110' : 'bg-red-50 text-red-500 hover:bg-red-100 hover:scale-110'}`} title={isSent ? 'Clique para marcar como Pendente' : 'Clique para marcar como Enviado'}>
                             {isSent ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
                         </button>
                       </td>
                      );
                   })}
                   <td className="px-4 py-4 text-center bg-white group-hover:bg-gray-50 sticky right-0 shadow-sm border-l">
-                      <button 
-                        onClick={() => onNavigateToUpload(company.id, activeCompetence)}
-                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                        title="Fazer Upload para esta empresa"
-                      >
-                          <Upload className="w-5 h-5" />
-                      </button>
+                      <button onClick={() => onNavigateToUpload(company.id, activeCompetence)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Fazer Upload para esta empresa"><Upload className="w-5 h-5" /></button>
                   </td>
                 </tr>
               ))}
               {getMatrixCompanies().length === 0 && (
-                <tr>
-                   <td colSpan={getMatrixCategories().length + 2} className="px-6 py-8 text-center text-gray-500">
-                      Nenhuma empresa encontrada com os filtros selecionados.
-                   </td>
-                </tr>
+                <tr><td colSpan={getMatrixCategories().length + 2} className="px-6 py-8 text-center text-gray-500">Nenhuma empresa encontrada com os filtros selecionados.</td></tr>
               )}
             </tbody>
           </table>

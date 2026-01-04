@@ -87,7 +87,10 @@ export interface UserSettings {
   emailSignature: string;
   whatsappTemplate: string;
   visibleDocumentCategories: string[];
+  customCategories: string[]; // Categorias criadas pelo usuário
   categoryKeywords: Record<string, string[]>;
-  priorityCategories: string[]; // New field for tie-breaking
+  priorityCategories: string[]; 
   categoryRules: Record<string, CategoryRule>;
+  dailySummaryNumber: string; // Número para receber o resumo das tarefas
+  dailySummaryTime: string; // Horário do envio (ex: "08:00")
 }

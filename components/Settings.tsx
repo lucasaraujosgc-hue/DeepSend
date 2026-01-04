@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Save, User, Mail, MessageCircle, FileText, Check, LayoutTemplate, Link as LinkIcon, Plus, Trash, Clock, CalendarDays, Star } from 'lucide-react';
+import { Save, User, Mail, MessageCircle, FileText, Check, LayoutTemplate, Link as LinkIcon, Plus, Trash, Clock, CalendarDays, Star, Tag, Smartphone } from 'lucide-react';
 import { UserSettings, CategoryRule } from '../types';
 import { DOCUMENT_CATEGORIES } from '../constants';
 
@@ -10,11 +10,15 @@ interface SettingsProps {
 }
 
 const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
-  const [activeTab, setActiveTab] = useState<'signatures' | 'documents' | 'bindings' | 'due_dates'>('signatures');
+  const [activeTab, setActiveTab] = useState<'signatures' | 'categories' | 'documents' | 'bindings' | 'due_dates' | 'daily'>('signatures');
   const [formData, setFormData] = useState<UserSettings>(settings);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [newKeyword, setNewKeyword] = useState('');
-  const [selectedCategoryForKeyword, setSelectedCategoryForKeyword] = useState(DOCUMENT_CATEGORIES[0]);
+  const [newCustomCategory, setNewCustomCategory] = useState('');
+  
+  // Combina categorias padrão com as customizadas para os dropdowns
+  const allCategories = [...DOCUMENT_CATEGORIES, ...(formData.customCategories || [])];
+  const [selectedCategoryForKeyword, setSelectedCategoryForKeyword] = useState(allCategories[0]);
 
   const handleSave = () => {
     onSave(formData);
@@ -70,6 +74,28 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
     }));
   };
 
+  const addCustomCategory = () => {
+      if (!newCustomCategory.trim()) return;
+      if (allCategories.includes(newCustomCategory.trim())) {
+          alert('Categoria já existe!');
+          return;
+      }
+      setFormData(prev => ({
+          ...prev,
+          customCategories: [...(prev.customCategories || []), newCustomCategory.trim()]
+      }));
+      setNewCustomCategory('');
+  };
+
+  const removeCustomCategory = (cat: string) => {
+      if(confirm(`Excluir a categoria "${cat}"?`)) {
+          setFormData(prev => ({
+              ...prev,
+              customCategories: (prev.customCategories || []).filter(c => c !== cat)
+          }));
+      }
+  };
+
   const updateRule = (category: string, field: keyof CategoryRule, value: any) => {
     setFormData(prev => ({
       ...prev,
@@ -90,7 +116,7 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
           <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
             <User className="w-6 h-6 text-blue-600" /> Configurações do Usuário
           </h1>
-          <p className="text-gray-500">Gerencie assinaturas, colunas e regras de documentos.</p>
+          <p className="text-gray-500">Gerencie assinaturas, categorias e automações.</p>
         </div>
         <button 
           onClick={handleSave}
@@ -106,31 +132,45 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
         <div className="flex border-b border-gray-200 overflow-x-auto">
           <button
             onClick={() => setActiveTab('signatures')}
-            className={`px-6 py-4 font-medium text-sm flex items-center gap-2 transition-colors border-b-2 whitespace-nowrap
+            className={`px-4 py-4 font-medium text-sm flex items-center gap-2 transition-colors border-b-2 whitespace-nowrap
               ${activeTab === 'signatures' ? 'border-blue-500 text-blue-600 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
           >
-            <Mail className="w-4 h-4" /> Assinaturas & Modelos
+            <Mail className="w-4 h-4" /> Assinaturas
+          </button>
+          <button
+            onClick={() => setActiveTab('categories')}
+            className={`px-4 py-4 font-medium text-sm flex items-center gap-2 transition-colors border-b-2 whitespace-nowrap
+              ${activeTab === 'categories' ? 'border-blue-500 text-blue-600 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+          >
+            <Tag className="w-4 h-4" /> Criar Categorias
           </button>
           <button
             onClick={() => setActiveTab('documents')}
-            className={`px-6 py-4 font-medium text-sm flex items-center gap-2 transition-colors border-b-2 whitespace-nowrap
+            className={`px-4 py-4 font-medium text-sm flex items-center gap-2 transition-colors border-b-2 whitespace-nowrap
               ${activeTab === 'documents' ? 'border-blue-500 text-blue-600 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
           >
             <LayoutTemplate className="w-4 h-4" /> Colunas (Matriz)
           </button>
           <button
             onClick={() => setActiveTab('bindings')}
-            className={`px-6 py-4 font-medium text-sm flex items-center gap-2 transition-colors border-b-2 whitespace-nowrap
+            className={`px-4 py-4 font-medium text-sm flex items-center gap-2 transition-colors border-b-2 whitespace-nowrap
               ${activeTab === 'bindings' ? 'border-blue-500 text-blue-600 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
           >
-            <LinkIcon className="w-4 h-4" /> Vinculações & Prioridades
+            <LinkIcon className="w-4 h-4" /> Vinculações
           </button>
           <button
             onClick={() => setActiveTab('due_dates')}
-            className={`px-6 py-4 font-medium text-sm flex items-center gap-2 transition-colors border-b-2 whitespace-nowrap
+            className={`px-4 py-4 font-medium text-sm flex items-center gap-2 transition-colors border-b-2 whitespace-nowrap
               ${activeTab === 'due_dates' ? 'border-blue-500 text-blue-600 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
           >
             <CalendarDays className="w-4 h-4" /> Vencimentos
+          </button>
+          <button
+            onClick={() => setActiveTab('daily')}
+            className={`px-4 py-4 font-medium text-sm flex items-center gap-2 transition-colors border-b-2 whitespace-nowrap
+              ${activeTab === 'daily' ? 'border-blue-500 text-blue-600 bg-blue-50/50' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+          >
+            <Clock className="w-4 h-4" /> Resumo Diário
           </button>
         </div>
 
@@ -183,6 +223,59 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
             </div>
           )}
 
+          {activeTab === 'categories' && (
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 max-w-2xl">
+                  <div className="mb-6">
+                      <h3 className="font-semibold text-gray-800">Gerenciar Categorias de Documentos</h3>
+                      <p className="text-sm text-gray-500">Crie novas categorias para organizar seus documentos.</p>
+                  </div>
+
+                  <div className="flex gap-2 mb-6">
+                      <input 
+                          type="text" 
+                          className="flex-1 border border-gray-300 rounded-lg px-4 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Nome da nova categoria..."
+                          value={newCustomCategory}
+                          onChange={(e) => setNewCustomCategory(e.target.value)}
+                      />
+                      <button 
+                          onClick={addCustomCategory}
+                          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
+                      >
+                          <Plus className="w-4 h-4" /> Adicionar
+                      </button>
+                  </div>
+
+                  <div className="space-y-2">
+                      <h4 className="text-sm font-semibold text-gray-700">Categorias Padrão</h4>
+                      <div className="flex flex-wrap gap-2">
+                          {DOCUMENT_CATEGORIES.map(cat => (
+                              <span key={cat} className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm border border-gray-200">
+                                  {cat}
+                              </span>
+                          ))}
+                      </div>
+                  </div>
+
+                  <div className="space-y-2 mt-6">
+                      <h4 className="text-sm font-semibold text-gray-700">Categorias Personalizadas</h4>
+                      {(!formData.customCategories || formData.customCategories.length === 0) && (
+                          <p className="text-sm text-gray-400 italic">Nenhuma categoria criada.</p>
+                      )}
+                      <div className="flex flex-wrap gap-2">
+                          {(formData.customCategories || []).map(cat => (
+                              <span key={cat} className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-sm border border-blue-200 flex items-center gap-2">
+                                  {cat}
+                                  <button onClick={() => removeCustomCategory(cat)} className="hover:text-red-500">
+                                      <Trash className="w-3 h-3" />
+                                  </button>
+                              </span>
+                          ))}
+                      </div>
+                  </div>
+              </div>
+          )}
+
           {activeTab === 'documents' && (
             <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
                <div className="mb-6">
@@ -191,7 +284,7 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
                </div>
 
                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                 {DOCUMENT_CATEGORIES.map(category => {
+                 {allCategories.map(category => {
                    const isSelected = formData.visibleDocumentCategories.includes(category);
                    return (
                      <label 
@@ -238,7 +331,7 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
                       value={selectedCategoryForKeyword}
                       onChange={(e) => setSelectedCategoryForKeyword(e.target.value)}
                     >
-                      {DOCUMENT_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                      {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
                   <div className="flex-[2] w-full">
@@ -261,7 +354,7 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
 
                {/* List Categories with Keywords Only */}
                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                 {DOCUMENT_CATEGORIES.map(category => {
+                 {allCategories.map(category => {
                    const keywords = formData.categoryKeywords[category] || [];
                    const isPriority = (formData.priorityCategories || []).includes(category);
 
@@ -313,7 +406,7 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {DOCUMENT_CATEGORIES.map(category => {
+                    {allCategories.map(category => {
                        const rule = formData.categoryRules[category] || { day: 10, rule: 'fixo' };
                        return (
                           <div key={category} className="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-sm">
@@ -362,6 +455,50 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
                           </div>
                        );
                     })}
+                  </div>
+              </div>
+          )}
+
+          {activeTab === 'daily' && (
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 max-w-2xl">
+                  <div className="mb-6">
+                      <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+                         <Smartphone className="w-5 h-5 text-green-600" /> Resumo Diário de Tarefas (WhatsApp)
+                      </h3>
+                      <p className="text-sm text-gray-500">
+                          Configure para receber um resumo automático das suas tarefas pendentes de Segunda a Sexta.
+                      </p>
+                  </div>
+
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 space-y-6">
+                      <div>
+                          <label className="block text-sm font-semibold text-gray-700 mb-1">Número do WhatsApp (com DDD)</label>
+                          <input 
+                              type="text" 
+                              className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="Ex: 75999999999"
+                              value={formData.dailySummaryNumber || ''}
+                              onChange={(e) => setFormData({...formData, dailySummaryNumber: e.target.value.replace(/\D/g, '')})}
+                          />
+                          <p className="text-xs text-gray-500 mt-1">Apenas números. O sistema enviará para este número.</p>
+                      </div>
+
+                      <div>
+                          <label className="block text-sm font-semibold text-gray-700 mb-1">Horário de Envio</label>
+                          <input 
+                              type="time" 
+                              className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+                              value={formData.dailySummaryTime || '08:00'}
+                              onChange={(e) => setFormData({...formData, dailySummaryTime: e.target.value})}
+                          />
+                          <p className="text-xs text-gray-500 mt-1">O resumo será enviado de Segunda a Sexta neste horário.</p>
+                      </div>
+
+                      <div className="bg-blue-50 p-4 rounded text-sm text-blue-800 border border-blue-100">
+                          <strong>Como funciona:</strong><br/>
+                          No horário definido, o sistema listará todas as tarefas <strong>Pendentes</strong> e <strong>Em Andamento</strong>, 
+                          ordenadas por prioridade (Alta {'>'} Média {'>'} Baixa).
+                      </div>
                   </div>
               </div>
           )}

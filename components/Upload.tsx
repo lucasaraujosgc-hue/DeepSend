@@ -40,6 +40,9 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loadingCompanies, setLoadingCompanies] = useState(false);
 
+  // Combine Default + Custom Categories
+  const allCategories = [...DOCUMENT_CATEGORIES, ...(userSettings.customCategories || [])];
+
   useEffect(() => {
     setLoadingCompanies(true);
     api.getCompanies()
@@ -309,7 +312,7 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
                           <div className="flex-1 w-full md:w-auto">
                               <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Categoria</label>
                               <select className="w-full text-sm border-gray-300 rounded px-2 py-1.5 border" value={file.category} onChange={(e) => updateFileCategory(idx, e.target.value)}>
-                                  {DOCUMENT_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                                  {allCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                               </select>
                           </div>
                           <div className="w-full md:w-40">
