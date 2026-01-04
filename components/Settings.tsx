@@ -14,6 +14,7 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
   const [activeTab, setActiveTab] = useState<'signatures' | 'categories' | 'documents' | 'bindings' | 'due_dates' | 'daily'>('signatures');
   const [formData, setFormData] = useState<UserSettings>(settings);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [newKeyword, setNewKeyword] = useState('');
   const [newCustomCategory, setNewCustomCategory] = useState('');
   const [loadingTest, setLoadingTest] = useState(false);
@@ -22,10 +23,19 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
   const allCategories = [...DOCUMENT_CATEGORIES, ...(formData.customCategories || [])];
   const [selectedCategoryForKeyword, setSelectedCategoryForKeyword] = useState(allCategories[0]);
 
-  const handleSave = () => {
-    onSave(formData);
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 3000);
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+        await api.saveSettings(formData); // Salva no servidor
+        onSave(formData); // Atualiza estado local
+        setSaveSuccess(true);
+        setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (e) {
+        console.error(e);
+        alert("Erro ao salvar configurações no servidor.");
+    } finally {
+        setIsSaving(false);
+    }
   };
 
   const toggleCategory = (category: string) => {
@@ -113,14 +123,16 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
 
   const handleTestDaily = async () => {
       if (!formData.dailySummaryNumber) {
-          alert("Salve um número de WhatsApp primeiro.");
+          alert("Preencha um número de WhatsApp primeiro.");
           return;
       }
       
       setLoadingTest(true);
       try {
           // Salva antes de testar para garantir que o backend tenha os dados atualizados
+          await api.saveSettings(formData);
           onSave(formData);
+          
           await api.triggerDailySummary();
           alert("Disparo solicitado! Verifique seu WhatsApp.");
       } catch (e: any) {
@@ -141,10 +153,11 @@ const Settings: React.FC<SettingsProps> = ({ settings, onSave }) => {
         </div>
         <button 
           onClick={handleSave}
-          className="bg-blue-600 text-white px-6 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 shadow-lg shadow-blue-500/20 transition-all"
+          disabled={isSaving}
+          className="bg-blue-600 text-white px-6 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 shadow-lg shadow-blue-500/20 transition-all disabled:opacity-70"
         >
-          {saveSuccess ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-          {saveSuccess ? 'Salvo!' : 'Salvar Alterações'}
+          {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : saveSuccess ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+          {isSaving ? 'Salvando...' : saveSuccess ? 'Salvo!' : 'Salvar Alterações'}
         </button>
       </div>
 

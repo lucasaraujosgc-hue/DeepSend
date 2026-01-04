@@ -14,6 +14,7 @@ import Send from './components/Send';
 import Login from './components/Login';
 import { DEFAULT_USER_SETTINGS, MOCK_DOCUMENTS } from './constants';
 import { UserSettings, Document, UploadedFile } from './types';
+import { api } from './services/api';
 
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -36,6 +37,18 @@ const App: React.FC = () => {
         setIsAuthenticated(true);
     }
   }, []);
+
+  // Fetch Settings on Auth
+  useEffect(() => {
+    if (isAuthenticated) {
+        api.getSettings().then(settings => {
+            if (settings) {
+                // Merge with defaults to ensure all fields exist (in case of schema updates)
+                setUserSettings(prev => ({ ...prev, ...settings }));
+            }
+        }).catch(err => console.error("Failed to load settings", err));
+    }
+  }, [isAuthenticated]);
 
   const handleLoginSuccess = (token?: string, remember?: boolean) => {
       if (remember && token) {
