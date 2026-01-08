@@ -159,7 +159,11 @@ const Documents: React.FC<DocumentsProps> = ({
           if (processingCategoryFilter) {
               detectedCategory = processingCategoryFilter;
           } else {
-              const category = identifyCategory(textForAnalysis, userSettings?.categoryKeywords || {}, userSettings?.priorityCategories || []);
+              const category = identifyCategory(
+                  textForAnalysis, 
+                  userSettings?.categoryKeywords || {}, 
+                  userSettings?.priorityCategories || [] // Passando prioridades
+              );
               detectedCategory = category ?? 'Outros';
           }
 
@@ -226,7 +230,11 @@ const Documents: React.FC<DocumentsProps> = ({
             if (processingCategoryFilter) {
                 detectedCategory = processingCategoryFilter;
             } else {
-                const category = identifyCategory(textForAnalysis, userSettings?.categoryKeywords || {}, userSettings?.priorityCategories || []);
+                const category = identifyCategory(
+                    textForAnalysis, 
+                    userSettings?.categoryKeywords || {}, 
+                    userSettings?.priorityCategories || [] // Passando prioridades
+                );
                 detectedCategory = category ?? 'Outros';
             }
 

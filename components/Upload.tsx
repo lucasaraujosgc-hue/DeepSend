@@ -124,7 +124,7 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
         const identified = identifyCategory(
             combinedText, 
             userSettings.categoryKeywords, 
-            userSettings.priorityCategories
+            userSettings.priorityCategories // Passando prioridades
         );
         
         let category = identified ?? 'Outros';
