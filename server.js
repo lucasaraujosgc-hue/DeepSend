@@ -27,6 +27,39 @@ const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
+// --- HELPER: Puppeteer Lock Cleaner ---
+const cleanPuppeteerLocks = (dir) => {
+    const locks = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+    if (fs.existsSync(dir)) {
+        locks.forEach(lock => {
+            const lockPath = path.join(dir, lock);
+            if (fs.existsSync(lockPath)) {
+                try {
+                    fs.unlinkSync(lockPath);
+                    console.log(`[Puppeteer Fix] Trava removida: ${lockPath}`);
+                } catch (e) {
+                    console.error(`[Puppeteer Fix] Falha ao remover trava: ${lockPath}`, e.message);
+                }
+            }
+        });
+        // Check inside Default folder too if it exists
+        const defaultDir = path.join(dir, 'Default');
+        if (fs.existsSync(defaultDir)) {
+             locks.forEach(lock => {
+                const lockPath = path.join(defaultDir, lock);
+                if (fs.existsSync(lockPath)) {
+                    try {
+                        fs.unlinkSync(lockPath);
+                        console.log(`[Puppeteer Fix] Trava removida (Default): ${lockPath}`);
+                    } catch (e) {
+                        console.error(`[Puppeteer Fix] Falha ao remover trava (Default): ${lockPath}`, e.message);
+                    }
+                }
+            });
+        }
+    }
+};
+
 // --- MULTI-TENANCY: Database Management ---
 const dbInstances = {};
 
@@ -87,6 +120,10 @@ const getWaClientWrapper = (username) => {
 
         const authPath = path.join(DATA_DIR, `whatsapp_auth_${username}`);
         if (!fs.existsSync(authPath)) fs.mkdirSync(authPath, { recursive: true });
+
+        // --- FIX: Clean Puppeteer Locks before starting ---
+        const sessionPath = path.join(authPath, `session-${username}`);
+        cleanPuppeteerLocks(sessionPath);
 
         const puppeteerExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
         
