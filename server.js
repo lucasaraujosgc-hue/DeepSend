@@ -37,6 +37,7 @@ const getDb = (username) => {
     const userDbPath = path.join(DATA_DIR, `${username}.db`);
     const db = new sqlite3.Database(userDbPath);
     
+    // Initialize tables for this specific user
     db.serialize(() => {
         db.run(`CREATE TABLE IF NOT EXISTS companies (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, docNumber TEXT, type TEXT, email TEXT, whatsapp TEXT)`);
         db.run(`CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, description TEXT, status TEXT, priority TEXT, color TEXT, dueDate TEXT, companyId INTEGER, recurrence TEXT, dayOfWeek TEXT, recurrenceDate TEXT, targetCompanyType TEXT)`);
@@ -45,12 +46,21 @@ const getDb = (username) => {
         db.run(`CREATE TABLE IF NOT EXISTS user_settings (id INTEGER PRIMARY KEY CHECK (id = 1), settings TEXT)`);
         db.run(`CREATE TABLE IF NOT EXISTS scheduled_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, message TEXT, nextRun TEXT, recurrence TEXT, active INTEGER, type TEXT, channels TEXT, targetType TEXT, selectedCompanyIds TEXT, attachmentFilename TEXT, attachmentOriginalName TEXT, documentsPayload TEXT, createdBy TEXT)`);
         
+        // --- MIGRATION CHECK ---
+        // Verifica se a coluna documentsPayload existe, se não, adiciona.
         db.all("PRAGMA table_info(scheduled_messages)", [], (err, rows) => {
-            if (err) return;
+            if (err) {
+                console.error("Erro ao verificar schema da tabela scheduled_messages:", err);
+                return;
+            }
             if (rows && rows.length > 0) {
                 const hasColumn = rows.some(col => col.name === 'documentsPayload');
                 if (!hasColumn) {
-                    db.run("ALTER TABLE scheduled_messages ADD COLUMN documentsPayload TEXT");
+                    console.log(`[Migration ${username}] Adicionando coluna documentsPayload...`);
+                    db.run("ALTER TABLE scheduled_messages ADD COLUMN documentsPayload TEXT", (alterErr) => {
+                        if (alterErr) console.error(`[Migration ${username}] Erro ao adicionar coluna:`, alterErr);
+                        else console.log(`[Migration ${username}] Coluna documentsPayload adicionada com sucesso.`);
+                    });
                 }
             }
         });
@@ -61,232 +71,729 @@ const getDb = (username) => {
 };
 
 // --- MULTI-TENANCY: WhatsApp Management ---
-const waClients = {};
+const waClients = {}; // { username: { client, qr, status, info } }
 
 const getWaClientWrapper = (username) => {
     if (!username) return null;
+    
     if (!waClients[username]) {
-        waClients[username] = { client: null, qr: null, status: 'disconnected', info: null };
+        // Inicializa estrutura
+        waClients[username] = {
+            client: null,
+            qr: null,
+            status: 'disconnected',
+            info: null
+        };
+
         const authPath = path.join(DATA_DIR, `whatsapp_auth_${username}`);
         if (!fs.existsSync(authPath)) fs.mkdirSync(authPath, { recursive: true });
 
+        const puppeteerExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
+        
         const client = new Client({
             authStrategy: new LocalAuth({ clientId: username, dataPath: authPath }), 
             puppeteer: {
                 headless: true,
-                executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+                executablePath: puppeteerExecutablePath,
+                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--disable-gpu'],
             }
         });
 
         client.on('qr', (qr) => { 
+            console.log(`QR Code gerado para ${username}`);
             QRCode.toDataURL(qr, (err, url) => { 
                 waClients[username].qr = url; 
                 waClients[username].status = 'generating_qr';
             }); 
         });
+        
         client.on('ready', () => { 
             waClients[username].status = 'connected';
             waClients[username].qr = null;
             waClients[username].info = client.info;
+            console.log(`WhatsApp Pronto para: ${username}`); 
         });
+        
         client.on('disconnected', () => { 
             waClients[username].status = 'disconnected';
             waClients[username].info = null;
+            console.log(`WhatsApp Desconectado para: ${username}`); 
         });
-        client.initialize().catch(() => { waClients[username].status = 'error'; });
+
+        client.initialize().catch((err) => {
+            console.error(`Erro WhatsApp (${username}):`, err);
+            waClients[username].status = 'error';
+        });
+        
         waClients[username].client = client;
     }
+
     return waClients[username];
 };
 
-// --- LOGIC: Send Daily Summary ---
+// --- LOGIC: Send Daily Summary Helper ---
 const sendDailySummaryToUser = async (user) => {
     const db = getDb(user);
+    if (!db) return;
+
     const waWrapper = getWaClientWrapper(user);
-    if (waWrapper.status !== 'connected') return { success: false, message: 'WhatsApp desconectado' };
+    if (waWrapper.status !== 'connected') {
+        console.log(`[Summary ${user}] WhatsApp não conectado. Abortando.`);
+        return { success: false, message: 'WhatsApp desconectado' };
+    }
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
         db.get("SELECT settings FROM user_settings WHERE id = 1", (e, r) => {
-            if (e || !r) return resolve({ success: false, message: 'Configurações não encontradas' });
+            if (e || !r) {
+                resolve({ success: false, message: 'Configurações não encontradas' });
+                return;
+            }
+            
             const settings = JSON.parse(r.settings);
-            if (!settings.dailySummaryNumber) return resolve({ success: false, message: 'Número não configurado' });
+            if (!settings.dailySummaryNumber) {
+                resolve({ success: false, message: 'Número para resumo não configurado' });
+                return;
+            }
 
-            const sql = `SELECT t.*, c.name as companyName FROM tasks t LEFT JOIN companies c ON t.companyId = c.id WHERE t.status != 'concluida'`;
+            // Busca tarefas pendentes e faz JOIN com empresas para pegar o nome
+            const sql = `
+                SELECT t.*, c.name as companyName 
+                FROM tasks t 
+                LEFT JOIN companies c ON t.companyId = c.id 
+                WHERE t.status != 'concluida'
+            `;
+
             db.all(sql, [], async (err, tasks) => {
-                if (err || !tasks || tasks.length === 0) return resolve({ success: true, message: 'Sem tarefas' });
+                if (err) {
+                    resolve({ success: false, message: 'Erro ao buscar tarefas' });
+                    return;
+                }
 
+                if (!tasks || tasks.length === 0) {
+                    // Opcional: Enviar msg "Sem tarefas pendentes"
+                    resolve({ success: true, message: 'Nenhuma tarefa pendente' });
+                    return;
+                }
+
+                // Ordena por prioridade: Alta > Média > Baixa
                 const priorityMap = { 'alta': 1, 'media': 2, 'baixa': 3 };
-                const sortedTasks = tasks.sort((a, b) => (priorityMap[a.priority] || 99) - (priorityMap[b.priority] || 99));
-
-                let message = `*📅 Resumo Diário de Tarefas*\n\n`;
-                message += `Você tem *${sortedTasks.length}* tarefas pendentes.\n\n`;
-
-                sortedTasks.forEach(task => {
-                    let icon = task.priority === 'alta' ? '🔴' : (task.priority === 'media' ? '🟡' : '🔵');
-                    message += `${icon} *${task.title}*\n`;
-                    if (task.companyName) message += `   🏢 ${task.companyName}\n`;
-                    if (task.dueDate) message += `   📅 Vence: ${task.dueDate}\n`;
-                    message += `\n`;
+                const sortedTasks = tasks.sort((a, b) => {
+                    const pA = priorityMap[a.priority] || 99;
+                    const pB = priorityMap[b.priority] || 99;
+                    return pA - pB;
                 });
 
+                // Monta a mensagem
+                let message = `*📅 Resumo Diário de Tarefas*\n\n`;
+                
+                // Contadores
+                const total = sortedTasks.length;
+                const high = sortedTasks.filter(t => t.priority === 'alta').length;
+                
+                message += `Você tem *${total}* tarefas pendentes (${high} urgentes).\n\n`;
+
+                sortedTasks.forEach(task => {
+                    let icon = '🔵'; // Baixa/Default
+                    if (task.priority === 'media') icon = '🟡';
+                    if (task.priority === 'alta') icon = '🔴';
+                    
+                    let statusText = '';
+                    if (task.status === 'pendente') statusText = '(Pendente)';
+                    if (task.status === 'em_andamento') statusText = '(Em Andamento)';
+
+                    message += `${icon} *${task.title}* ${statusText}\n`;
+                    
+                    if (task.companyName) {
+                        message += `   🏢 ${task.companyName}\n`;
+                    }
+                    
+                    if (task.dueDate) {
+                        // Formata data de YYYY-MM-DD para DD/MM/YYYY se necessário
+                        let dateStr = task.dueDate;
+                        if (dateStr.includes('-')) {
+                            const parts = dateStr.split('-');
+                            if (parts.length === 3) dateStr = `${parts[2]}/${parts[1]}/${parts[0]}`;
+                        }
+                        message += `   📅 Vence: ${dateStr}\n`;
+                    }
+                    message += `\n`; // Espaçamento entre tarefas
+                });
+
+                message += `_Gerado automaticamente pelo Contábil Manager Pro_`;
+
+                // Envia
                 try {
                     let number = settings.dailySummaryNumber.replace(/\D/g, '');
                     if (!number.startsWith('55')) number = '55' + number;
-                    await waWrapper.client.sendMessage(`${number}@c.us`, message);
-                    resolve({ success: true });
+                    const chatId = `${number}@c.us`;
+                    await waWrapper.client.sendMessage(chatId, message);
+                    console.log(`[Summary ${user}] Resumo diário enviado com sucesso para ${number}.`);
+                    resolve({ success: true, message: 'Enviado com sucesso' });
                 } catch (sendErr) {
-                    resolve({ success: false, message: sendErr.message });
+                    console.error(`[Summary ${user}] Erro ao enviar:`, sendErr);
+                    resolve({ success: false, message: 'Erro no envio do WhatsApp: ' + sendErr.message });
                 }
             });
         });
     });
 };
 
-// --- EMAIL CONFIGURATION (DYNAMIC FROM ENV) ---
+// --- Middleware de Autenticação ---
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+    if (!token) return res.status(401).json({ error: 'Token não fornecido' });
+
+    const parts = token.split('-');
+    if (parts.length < 3) return res.status(403).json({ error: 'Token inválido' });
+
+    const user = parts.slice(2).join('-'); 
+    const envUsers = (process.env.USERS || '').split(',');
+    if (!envUsers.includes(user)) return res.status(403).json({ error: 'Usuário não autorizado' });
+
+    req.user = user;
+    next();
+};
+
+// Configuração Multer
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) { cb(null, UPLOADS_DIR) },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const cleanName = file.originalname.replace(/[^a-zA-Z0-9.]/g, '_');
+    cb(null, uniqueSuffix + '-' + cleanName)
+  }
+})
+const upload = multer({ storage: storage });
+
 const emailTransporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.EMAIL_PORT || '465'),
-    secure: (process.env.EMAIL_PORT === '465'), // true para 465, false para outras
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
     }
 });
 
-// --- Middleware & Auth ---
-const authenticateToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'Token não fornecido' });
-    const parts = token.split('-');
-    const user = parts.slice(2).join('-'); 
-    const envUsers = (process.env.USERS || '').split(',');
-    if (!envUsers.includes(user)) return res.status(403).json({ error: 'Não autorizado' });
-    req.user = user;
-    next();
-};
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
-  filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname.replace(/[^a-zA-Z0-9.]/g, '_'))
-});
-const upload = multer({ storage });
-
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'dist')));
 
+// --- HTML Builder Helper ---
 const buildEmailHtml = (messageBody, documents, emailSignature) => {
     let docsTable = '';
     if (documents && documents.length > 0) {
-        let rows = documents.map(doc => `<tr><td>${doc.docName}</td><td>${doc.category}</td><td>${doc.dueDate || 'N/A'}</td></tr>`).join('');
-        docsTable = `<table border="1" style="width:100%; border-collapse:collapse;"><tr><th>Doc</th><th>Cat</th><th>Venc</th></tr>${rows}</table>`;
+        const sortedDocs = [...documents].sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
+        let rows = '';
+        sortedDocs.forEach(doc => {
+            rows += `
+                <tr style="border-bottom: 1px solid #eee;">
+                    <td style="padding: 10px; color: #333;">${doc.docName}</td>
+                    <td style="padding: 10px; color: #555;">${doc.category}</td>
+                    <td style="padding: 10px; color: #555;">${doc.dueDate || 'N/A'}</td>
+                    <td style="padding: 10px; color: #555;">${doc.competence}</td>
+                </tr>
+            `;
+        });
+        docsTable = `<h3 style="color: #2c3e50; border-bottom: 2px solid #eff6ff; padding-bottom: 10px; margin-top: 30px; font-size: 16px;">Documentos em Anexo:</h3><table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px;"><thead><tr style="background-color: #f8fafc; color: #64748b;"><th style="padding: 10px; text-align: left; border-bottom: 2px solid #e2e8f0;">Documento</th><th style="padding: 10px; text-align: left; border-bottom: 2px solid #e2e8f0;">Categoria</th><th style="padding: 10px; text-align: left; border-bottom: 2px solid #e2e8f0;">Vencimento</th><th style="padding: 10px; text-align: left; border-bottom: 2px solid #e2e8f0;">Competência</th></tr></thead><tbody>${rows}</tbody></table>`;
     }
-    return `<div>${messageBody.replace(/\n/g, '<br>')}${docsTable}<br>${emailSignature || ''}</div>`;
+    return `<html><body style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; margin: 0; padding: 20px;"><div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);"><div style="background-color: #f8f9fa; padding: 20px; border-radius: 6px; border-left: 4px solid #2563eb; margin-bottom: 25px;">${messageBody.replace(/\n/g, '<br>')}</div>${docsTable}<div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 14px; color: #64748b;">${emailSignature || ''}</div></div></body></html>`;
 };
 
-// --- API ROUTES ---
+// --- ROUTES ---
+
+// Public Route
 app.post('/api/login', (req, res) => {
     const { user, password } = req.body;
     const envUsers = (process.env.USERS || 'admin').split(',');
     const envPasss = (process.env.PASSWORDS || 'admin').split(',');
-    const idx = envUsers.indexOf(user);
-    if (idx !== -1 && envPasss[idx] === password) {
+    const userIndex = envUsers.indexOf(user);
+
+    if (userIndex !== -1 && envPasss[userIndex] === password) {
         getWaClientWrapper(user);
         res.json({ success: true, token: `session-${Date.now()}-${user}` });
-    } else res.status(401).json({ error: 'Inválido' });
+    } else {
+        res.status(401).json({ error: 'Credenciais inválidas' });
+    }
 });
 
+// Protected Routes
 app.use('/api', authenticateToken);
 
+app.post('/api/upload', upload.single('file'), (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'Nenhum arquivo' });
+    res.json({ filename: req.file.filename, originalName: req.file.originalname });
+});
+
 app.get('/api/settings', (req, res) => {
-    getDb(req.user).get("SELECT settings FROM user_settings WHERE id = 1", (err, row) => res.json(row ? JSON.parse(row.settings) : null));
-});
-app.post('/api/settings', (req, res) => {
-    getDb(req.user).run("INSERT INTO user_settings (id, settings) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET settings=excluded.settings", [JSON.stringify(req.body)], () => res.json({ success: true }));
-});
-app.post('/api/trigger-daily-summary', async (req, res) => {
-    const result = await sendDailySummaryToUser(req.user);
-    res.json(result);
-});
-
-app.get('/api/companies', (req, res) => getDb(req.user).all('SELECT * FROM companies ORDER BY name ASC', (err, rows) => res.json(rows || [])));
-app.post('/api/companies', (req, res) => {
-    const c = req.body;
     const db = getDb(req.user);
-    if (c.id) db.run(`UPDATE companies SET name=?, docNumber=?, type=?, email=?, whatsapp=? WHERE id=?`, [c.name, c.docNumber, c.type, c.email, c.whatsapp, c.id], () => res.json({success: true}));
-    else db.run(`INSERT INTO companies (name, docNumber, type, email, whatsapp) VALUES (?, ?, ?, ?, ?)`, [c.name, c.docNumber, c.type, c.email, c.whatsapp], function() { res.json({success: true, id: this.lastID}); });
+    if (!db) return res.status(500).json({ error: 'Database error' });
+    db.get("SELECT settings FROM user_settings WHERE id = 1", (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(row ? JSON.parse(row.settings) : null);
+    });
 });
-app.delete('/api/companies/:id', (req, res) => getDb(req.user).run('DELETE FROM companies WHERE id = ?', [req.params.id], () => res.json({ success: true })));
 
-app.get('/api/tasks', (req, res) => getDb(req.user).all('SELECT * FROM tasks', (err, rows) => res.json(rows || [])));
+app.post('/api/settings', (req, res) => {
+    const db = getDb(req.user);
+    if (!db) return res.status(500).json({ error: 'Database error' });
+    const settingsJson = JSON.stringify(req.body);
+    db.run("INSERT INTO user_settings (id, settings) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET settings=excluded.settings", [settingsJson], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true });
+    });
+});
+
+app.post('/api/trigger-daily-summary', async (req, res) => {
+    try {
+        const result = await sendDailySummaryToUser(req.user);
+        if (result && result.success) {
+            res.json({ success: true });
+        } else {
+            res.status(400).json({ error: result ? result.message : "Falha desconhecida" });
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/companies', (req, res) => { 
+    const db = getDb(req.user);
+    if (!db) return res.status(500).json({ error: 'Database error' });
+    db.all('SELECT * FROM companies ORDER BY name ASC', (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(rows || []);
+    }); 
+});
+
+app.post('/api/companies', (req, res) => {
+    const { id, name, docNumber, type, email, whatsapp } = req.body;
+    const db = getDb(req.user);
+    if (!db) return res.status(500).json({ error: 'Database error' });
+
+    if (id) {
+        db.run(`UPDATE companies SET name=?, docNumber=?, type=?, email=?, whatsapp=? WHERE id=?`, 
+            [name, docNumber, type, email, whatsapp, id], 
+            function(err) { 
+                if (err) return res.status(500).json({ error: err.message });
+                res.json({success: true, id});
+            });
+    } else {
+        db.run(`INSERT INTO companies (name, docNumber, type, email, whatsapp) VALUES (?, ?, ?, ?, ?)`, 
+            [name, docNumber, type, email, whatsapp], 
+            function(err) { 
+                if (err) return res.status(500).json({ error: err.message });
+                res.json({success: true, id: this.lastID});
+            });
+    }
+});
+
+app.delete('/api/companies/:id', (req, res) => { 
+    const db = getDb(req.user);
+    if (!db) return res.status(500).json({ error: 'Database error' });
+    db.run('DELETE FROM companies WHERE id = ?', [req.params.id], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ success: true });
+    });
+});
+
+app.get('/api/tasks', (req, res) => {
+    getDb(req.user).all('SELECT * FROM tasks', (err, rows) => res.json(rows || []));
+});
 app.post('/api/tasks', (req, res) => {
     const t = req.body;
     const db = getDb(req.user);
-    if (t.id && t.id < 1000000000000) db.run(`UPDATE tasks SET title=?, description=?, status=?, priority=?, color=?, dueDate=?, companyId=?, recurrence=?, dayOfWeek=?, recurrenceDate=?, targetCompanyType=? WHERE id=?`, [t.title, t.description, t.status, t.priority, t.color, t.dueDate, t.companyId, t.recurrence, t.dayOfWeek, t.recurrenceDate, t.targetCompanyType, t.id], () => res.json({ success: true }));
-    else db.run(`INSERT INTO tasks (title, description, status, priority, color, dueDate, companyId, recurrence, dayOfWeek, recurrenceDate, targetCompanyType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [t.title, t.description, t.status, t.priority, t.color, t.dueDate, t.companyId, t.recurrence, t.dayOfWeek, t.recurrenceDate, t.targetCompanyType], function() { res.json({ success: true, id: this.lastID }); });
-});
-app.delete('/api/tasks/:id', (req, res) => getDb(req.user).run('DELETE FROM tasks WHERE id = ?', [req.params.id], () => res.json({ success: true })));
-
-app.post('/api/upload', upload.single('file'), (req, res) => res.json({ filename: req.file.filename, originalName: req.file.originalname }));
-
-app.post('/api/send-documents', async (req, res) => {
-    const { documents, subject, messageBody, channels, emailSignature, whatsappTemplate } = req.body;
-    const db = getDb(req.user);
-    const waWrapper = getWaClientWrapper(req.user);
-    const clientReady = waWrapper.status === 'connected';
-
-    const docsByCompany = documents.reduce((acc, d) => { (acc[d.companyId] = acc[d.companyId] || []).push(d); return acc; }, {});
-    let successCount = 0;
-    let sentIds = [];
-
-    for (const companyId of Object.keys(docsByCompany)) {
-        const companyDocs = docsByCompany[companyId];
-        const company = await new Promise(r => db.get("SELECT * FROM companies WHERE id = ?", [companyId], (e, row) => r(row)));
-        if (!company) continue;
-
-        const attachments = companyDocs.map(d => ({ filename: d.docName, path: path.join(UPLOADS_DIR, d.serverFilename) })).filter(a => fs.existsSync(a.path));
-
-        if (channels.email && company.email) {
-            try {
-                await emailTransporter.sendMail({
-                    from: process.env.EMAIL_USER,
-                    to: company.email,
-                    subject: `${subject} - ${companyDocs[0].competence}`,
-                    html: buildEmailHtml(messageBody, companyDocs, emailSignature),
-                    attachments
-                });
-            } catch (e) { console.error("Email error", e); }
-        }
-
-        if (channels.whatsapp && company.whatsapp && clientReady) {
-            try {
-                let num = company.whatsapp.replace(/\D/g, '');
-                if (!num.startsWith('55')) num = '55' + num;
-                const chatId = `${num}@c.us`;
-                await waWrapper.client.sendMessage(chatId, `*📄 Arquivos:* \n${messageBody}\n\n${whatsappTemplate || ''}`);
-                for (const att of attachments) {
-                    await waWrapper.client.sendMessage(chatId, MessageMedia.fromFilePath(att.path));
-                }
-            } catch (e) { console.error("WA error", e); }
-        }
-
-        companyDocs.forEach(d => {
-            if (d.id) sentIds.push(d.id);
-            db.run(`INSERT INTO sent_logs (companyName, docName, category, sentAt, channels, status) VALUES (?, ?, ?, datetime('now'), ?, 'success')`, [company.name, d.docName, d.category, JSON.stringify(channels)]);
-            db.run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, 'sent') ON CONFLICT DO UPDATE SET status='sent'`, [d.companyId, d.category, d.competence]);
-            successCount++;
-        });
+    if (t.id && t.id < 1000000000000) {
+        db.run(`UPDATE tasks SET title=?, description=?, status=?, priority=?, color=?, dueDate=?, companyId=?, recurrence=?, dayOfWeek=?, recurrenceDate=?, targetCompanyType=? WHERE id=?`, 
+        [t.title, t.description, t.status, t.priority, t.color, t.dueDate, t.companyId, t.recurrence, t.dayOfWeek, t.recurrenceDate, t.targetCompanyType, t.id], 
+        function(err) { res.json({ success: !err, id: t.id }); });
+    } else {
+        db.run(`INSERT INTO tasks (title, description, status, priority, color, dueDate, companyId, recurrence, dayOfWeek, recurrenceDate, targetCompanyType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, 
+        [t.title, t.description, t.status, t.priority, t.color, t.dueDate, t.companyId, t.recurrence, t.dayOfWeek, t.recurrenceDate, t.targetCompanyType], 
+        function(err) { res.json({ success: !err, id: this.lastID }); });
     }
-    res.json({ success: true, sent: successCount, sentIds });
+});
+app.delete('/api/tasks/:id', (req, res) => { getDb(req.user).run('DELETE FROM tasks WHERE id = ?', [req.params.id], (err) => res.json({ success: !err })); });
+
+app.get('/api/documents/status', (req, res) => {
+    const sql = req.query.competence ? 'SELECT * FROM document_status WHERE competence = ?' : 'SELECT * FROM document_status';
+    getDb(req.user).all(sql, req.query.competence ? [req.query.competence] : [], (err, rows) => res.json(rows || []));
+});
+app.post('/api/documents/status', (req, res) => {
+    const { companyId, category, competence, status } = req.body;
+    getDb(req.user).run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, ?) ON CONFLICT(companyId, category, competence) DO UPDATE SET status = excluded.status`, [companyId, category, competence, status], (err) => res.json({ success: !err }));
+});
+
+// --- Scheduled Messages Routes ---
+app.get('/api/scheduled', (req, res) => {
+    getDb(req.user).all("SELECT * FROM scheduled_messages", (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(rows.map(row => ({
+            ...row, 
+            active: !!row.active, 
+            channels: JSON.parse(row.channels || '{}'),
+            selectedCompanyIds: row.selectedCompanyIds ? JSON.parse(row.selectedCompanyIds) : [],
+            documentsPayload: row.documentsPayload || null
+        })) || []);
+    });
+});
+
+app.post('/api/scheduled', (req, res) => {
+    const { id, title, message, nextRun, recurrence, active, type, channels, targetType, selectedCompanyIds, attachmentFilename, attachmentOriginalName, documentsPayload } = req.body;
+    const db = getDb(req.user);
+    const channelsStr = JSON.stringify(channels);
+    const companyIdsStr = JSON.stringify(selectedCompanyIds || []);
+
+    if (id) {
+        db.run(`UPDATE scheduled_messages SET title=?, message=?, nextRun=?, recurrence=?, active=?, type=?, channels=?, targetType=?, selectedCompanyIds=?, attachmentFilename=?, attachmentOriginalName=?, documentsPayload=? WHERE id=?`,
+        [title, message, nextRun, recurrence, active ? 1 : 0, type, channelsStr, targetType, companyIdsStr, attachmentFilename, attachmentOriginalName, documentsPayload, id],
+        function(err) { if (err) return res.status(500).json({error: err.message}); res.json({success: true, id}); });
+    } else {
+        db.run(`INSERT INTO scheduled_messages (title, message, nextRun, recurrence, active, type, channels, targetType, selectedCompanyIds, attachmentFilename, attachmentOriginalName, documentsPayload, createdBy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [title, message, nextRun, recurrence, active ? 1 : 0, type, channelsStr, targetType, companyIdsStr, attachmentFilename, attachmentOriginalName, documentsPayload, req.user],
+        function(err) { if (err) return res.status(500).json({error: err.message}); res.json({success: true, id: this.lastID}); });
+    }
+});
+
+app.delete('/api/scheduled/:id', (req, res) => {
+    getDb(req.user).run('DELETE FROM scheduled_messages WHERE id = ?', [req.params.id], (err) => res.json({ success: !err }));
 });
 
 app.get('/api/whatsapp/status', (req, res) => { 
-    const w = getWaClientWrapper(req.user);
-    res.json({ status: w.status, qr: w.qr, info: w.info }); 
+    const wrapper = getWaClientWrapper(req.user);
+    res.json({ 
+        status: wrapper.status, 
+        qr: wrapper.qr, 
+        info: wrapper.info 
+    }); 
+});
+app.post('/api/whatsapp/disconnect', async (req, res) => { 
+    try { 
+        const wrapper = getWaClientWrapper(req.user);
+        if (wrapper.client) {
+            await wrapper.client.logout(); 
+            wrapper.status = 'disconnected';
+            wrapper.qr = null;
+        }
+        res.json({ success: true }); 
+    } catch (e) { res.status(500).json({ error: e.message }); } 
 });
 
-app.get(/.*/, (req, res) => res.sendFile(path.join(__dirname, 'dist', 'index.html')));
+app.post('/api/send-documents', async (req, res) => {
+    // Mesma lógica de envio...
+    const { documents, subject, messageBody, channels, emailSignature, whatsappTemplate } = req.body;
+    const db = getDb(req.user);
+    const waWrapper = getWaClientWrapper(req.user);
+    const client = waWrapper.client;
+    const clientReady = waWrapper.status === 'connected';
 
-app.listen(port, () => console.log(`Server: ${port}`));
+    let successCount = 0;
+    let errors = [];
+    let sentIds = [];
+
+    const docsByCompany = documents.reduce((acc, doc) => {
+        if (!acc[doc.companyId]) acc[doc.companyId] = [];
+        acc[doc.companyId].push(doc);
+        return acc;
+    }, {});
+
+    const companyIds = Object.keys(docsByCompany);
+
+    for (const companyId of companyIds) {
+        const companyDocs = docsByCompany[companyId];
+        
+        try {
+            const company = await new Promise((resolve, reject) => {
+                db.get("SELECT * FROM companies WHERE id = ?", [companyId], (err, row) => {
+                    if (err) reject(err); else resolve(row);
+                });
+            });
+
+            if (!company) { errors.push(`Empresa ID ${companyId} não encontrada.`); continue; }
+
+            const sortedDocs = [...companyDocs].sort((a, b) => {
+                const dateA = a.dueDate ? a.dueDate.split('/').reverse().join('') : '99999999';
+                const dateB = b.dueDate ? b.dueDate.split('/').reverse().join('') : '99999999';
+                return dateA.localeCompare(dateB);
+            });
+
+            const validAttachments = [];
+            for (const doc of sortedDocs) {
+                const filePath = path.join(UPLOADS_DIR, doc.serverFilename);
+                if (fs.existsSync(filePath)) {
+                    validAttachments.push({
+                        filename: doc.docName,
+                        path: filePath,
+                        contentType: 'application/pdf',
+                        docData: doc
+                    });
+                } else {
+                    errors.push(`Arquivo sumiu: ${doc.docName}`);
+                }
+            }
+
+            if (validAttachments.length === 0 && companyDocs.length > 0) { continue; }
+
+            if (channels.email && company.email) {
+                try {
+                    const finalHtml = buildEmailHtml(messageBody, companyDocs, emailSignature);
+                    const finalSubject = `${subject} - Competência: ${companyDocs[0].competence || 'N/A'}`; 
+                    await emailTransporter.sendMail({
+                        from: process.env.EMAIL_USER,
+                        to: company.email,
+                        subject: finalSubject,
+                        html: finalHtml,
+                        attachments: validAttachments.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
+                    });
+                } catch (e) { errors.push(`Erro Email ${company.name}: ${e.message}`); }
+            }
+
+            if (channels.whatsapp && company.whatsapp && clientReady) {
+                try {
+                    let number = company.whatsapp.replace(/\D/g, '');
+                    if (!number.startsWith('55')) number = '55' + number;
+                    const chatId = `${number}@c.us`;
+
+                    const listaArquivos = validAttachments.map(att => 
+                        `• ${att.docData.docName} (${att.docData.category || 'Anexo'}, Venc: ${att.docData.dueDate || 'N/A'})`
+                    ).join('\n');
+                    
+                    const whatsappSignature = whatsappTemplate || "_Esses arquivos também foram enviados por e-mail_\n\nAtenciosamente,\nContabilidade";
+                    const mensagemCompleta = `*📄 Olá!* \n\n${messageBody}\n\n*Arquivos enviados:*\n${listaArquivos}\n\n${whatsappSignature}`;
+
+                    await client.sendMessage(chatId, mensagemCompleta);
+                    for (const att of validAttachments) {
+                        const media = MessageMedia.fromFilePath(att.path);
+                        media.filename = att.filename;
+                        await client.sendMessage(chatId, media);
+                        await new Promise(r => setTimeout(r, 1000));
+                    }
+                } catch (e) { errors.push(`Erro Zap ${company.name}: ${e.message}`); }
+            }
+
+            for (const doc of companyDocs) {
+                if (doc.category) { // Se tiver categoria é Documento, se não pode ser mensagem avulsa
+                    db.run(`INSERT INTO sent_logs (companyName, docName, category, sentAt, channels, status) VALUES (?, ?, ?, datetime('now', 'localtime'), ?, 'success')`, 
+                        [company.name, doc.docName, doc.category, JSON.stringify(channels)]);
+                    
+                    db.run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, 'sent') ON CONFLICT(companyId, category, competence) DO UPDATE SET status='sent'`, 
+                        [doc.companyId, doc.category, doc.competence]);
+                }
+                if (doc.id) sentIds.push(doc.id);
+                successCount++;
+            }
+        } catch (e) { errors.push(`Falha geral empresa ${companyId}: ${e.message}`); }
+    }
+    
+    res.json({ success: true, sent: successCount, sentIds, errors });
+});
+
+app.get('/api/recent-sends', (req, res) => {
+    getDb(req.user).all("SELECT * FROM sent_logs ORDER BY id DESC LIMIT 3", (err, rows) => res.json(rows || []));
+});
+
+app.get(/.*/, (req, res) => {
+    if (!req.path.startsWith('/api')) res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
+// --- CRON JOB: SCHEDULED MESSAGES ---
+setInterval(() => {
+    const envUsers = (process.env.USERS || '').split(',');
+    // Itera por todos os usuários (dbs)
+    envUsers.forEach(user => {
+        const db = getDb(user);
+        if (!db) return;
+
+        // CORREÇÃO DE FUSO HORÁRIO
+        const now = new Date();
+        const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+        const brazilTime = new Date(utc - (3600000 * 3)); // UTC - 3h
+        const nowStr = brazilTime.toISOString().slice(0, 16); // "YYYY-MM-DDTHH:mm"
+
+        db.all("SELECT * FROM scheduled_messages WHERE active = 1 AND nextRun <= ?", [nowStr], async (err, rows) => {
+            if (err || !rows || rows.length === 0) return;
+
+            console.log(`[CRON ${user}] Processando ${rows.length} agendamentos... Hora Server(BRT): ${nowStr}`);
+            
+            // Carrega dependências do usuário
+            const waWrapper = getWaClientWrapper(user);
+            const clientReady = waWrapper.status === 'connected';
+
+            // Carrega Configurações para assinatura
+            const settings = await new Promise(resolve => {
+                db.get("SELECT settings FROM user_settings WHERE id = 1", (e, r) => resolve(r ? JSON.parse(r.settings) : null));
+            });
+
+            for (const msg of rows) {
+                const channels = JSON.parse(msg.channels || '{}');
+                const selectedIds = JSON.parse(msg.selectedCompanyIds || '[]');
+                
+                // Determina alvos
+                let targetCompanies = [];
+                if (msg.targetType === 'selected') {
+                   if (selectedIds.length > 0) {
+                        const placeholders = selectedIds.map(() => '?').join(',');
+                        targetCompanies = await new Promise(resolve => db.all(`SELECT * FROM companies WHERE id IN (${placeholders})`, selectedIds, (e, r) => resolve(r || [])));
+                   }
+                } else {
+                    const typeFilter = msg.targetType === 'mei' ? 'MEI' : 'CNPJ'; // Simplificação, na real 'normal' é != MEI
+                    const operator = msg.targetType === 'mei' ? '=' : '!=';
+                    // Nota: para 'normal' estamos pegando tudo que não é MEI
+                    targetCompanies = await new Promise(resolve => db.all(`SELECT * FROM companies WHERE type ${operator} 'MEI'`, (e, r) => resolve(r || [])));
+                }
+                
+                // Parse documentsPayload if exists
+                let specificDocs = [];
+                if (msg.documentsPayload) {
+                    try { specificDocs = JSON.parse(msg.documentsPayload); } catch(e) {}
+                }
+
+                // Dispara envios
+                for (const company of targetCompanies) {
+                    
+                    // Prepara anexos (Genéricos ou Específicos)
+                    let attachmentsToSend = [];
+                    let finalBody = msg.message;
+                    let companySpecificDocs = [];
+
+                    if (specificDocs.length > 0) {
+                        // Modo "Lote de Documentos": Filtra docs para ESTA empresa
+                        companySpecificDocs = specificDocs.filter(d => d.companyId === company.id);
+                        if (companySpecificDocs.length === 0) continue; // Pula se não tem doc para essa empresa no lote
+                        
+                        for (const doc of companySpecificDocs) {
+                             if (doc.serverFilename) {
+                                 const p = path.join(UPLOADS_DIR, doc.serverFilename);
+                                 if (fs.existsSync(p)) {
+                                     attachmentsToSend.push({ filename: doc.docName, path: p, contentType: 'application/pdf', docData: doc });
+                                 }
+                             }
+                        }
+                    } else if (msg.attachmentFilename) {
+                        // Modo "Mensagem Genérica": Anexo único para todos
+                        const p = path.join(UPLOADS_DIR, msg.attachmentFilename);
+                        if (fs.existsSync(p)) {
+                            attachmentsToSend.push({ filename: msg.attachmentOriginalName, path: p, contentType: 'application/pdf' });
+                        }
+                    }
+
+                    if (channels.email && company.email) {
+                        try {
+                             // Se for modo Docs, usa html builder completo. Se for Msg, usa html simples
+                             const htmlContent = specificDocs.length > 0 
+                                ? buildEmailHtml(msg.message, companySpecificDocs, settings?.emailSignature)
+                                : buildEmailHtml(msg.message, [], settings?.emailSignature);
+
+                             await emailTransporter.sendMail({
+                                from: process.env.EMAIL_USER,
+                                to: company.email,
+                                subject: msg.title,
+                                html: htmlContent,
+                                attachments: attachmentsToSend.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
+                            });
+                        } catch(e) { console.error(`[CRON] Erro email ${company.name}`, e); }
+                    }
+
+                    if (channels.whatsapp && company.whatsapp && clientReady) {
+                        try {
+                            let number = company.whatsapp.replace(/\D/g, '');
+                            if (!number.startsWith('55')) number = '55' + number;
+                            const chatId = `${number}@c.us`;
+                            
+                            // Monta mensagem zap (Formatação Rica Unificada)
+                            let waBody = `*${msg.title}*\n\n${msg.message}`;
+
+                            if (specificDocs.length > 0) {
+                                // Se for envio de documentos específicos, formata igual ao envio direto
+                                waBody = `*📄 Olá!* \n\n${msg.message}\n\n*Arquivos enviados:*`;
+                                const listaArquivos = attachmentsToSend.map(att => 
+                                    `• ${att.docData?.docName || att.filename} (${att.docData?.category || 'Anexo'}, Venc: ${att.docData?.dueDate || 'N/A'})`
+                                ).join('\n');
+                                waBody += `\n${listaArquivos}`;
+                            } else if (attachmentsToSend.length > 0) {
+                                // Se for anexo genérico
+                                waBody += `\n\n*Arquivo enviado:* ${attachmentsToSend[0].filename}`;
+                            }
+                            
+                            // Adiciona assinatura
+                            waBody += `\n\n${settings?.whatsappTemplate || ''}`;
+
+                            await waWrapper.client.sendMessage(chatId, waBody);
+                            
+                            for (const att of attachmentsToSend) {
+                                const media = MessageMedia.fromFilePath(att.path);
+                                media.filename = att.filename;
+                                await waWrapper.client.sendMessage(chatId, media);
+                                await new Promise(r => setTimeout(r, 1000)); // Throttle
+                            }
+                        } catch(e) { console.error(`[CRON] Erro zap ${company.name}`, e); }
+                    }
+                    
+                    // Se enviou documentos específicos, registra logs e status
+                    if (companySpecificDocs.length > 0) {
+                        for (const doc of companySpecificDocs) {
+                            if (doc.category) {
+                                db.run(`INSERT INTO sent_logs (companyName, docName, category, sentAt, channels, status) VALUES (?, ?, ?, datetime('now', 'localtime'), ?, 'success')`, 
+                                    [company.name, doc.docName, doc.category, JSON.stringify(channels)]);
+                                
+                                db.run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, 'sent') ON CONFLICT(companyId, category, competence) DO UPDATE SET status='sent'`, 
+                                    [doc.companyId, doc.category, doc.competence]);
+                            }
+                        }
+                    }
+                }
+
+                // Atualiza Recorrência ou Desativa
+                if (msg.recurrence === 'unico') {
+                    db.run("UPDATE scheduled_messages SET active = 0 WHERE id = ?", [msg.id]);
+                } else {
+                    // Calcula proxima data simples
+                    const nextDate = new Date(msg.nextRun);
+                    if (msg.recurrence === 'mensal') nextDate.setMonth(nextDate.getMonth() + 1);
+                    else if (msg.recurrence === 'trimestral') nextDate.setMonth(nextDate.getMonth() + 3);
+                    else if (msg.recurrence === 'anual') nextDate.setFullYear(nextDate.getFullYear() + 1);
+                    
+                    const nextRunStr = nextDate.toISOString().slice(0, 16);
+                    db.run("UPDATE scheduled_messages SET nextRun = ? WHERE id = ?", [nextRunStr, msg.id]);
+                }
+            }
+        });
+    });
+}, 60000); // Check every minute
+
+// --- CRON JOB: DAILY TASK SUMMARY ---
+setInterval(() => {
+    const envUsers = (process.env.USERS || '').split(',');
+    envUsers.forEach(user => {
+        const db = getDb(user);
+        if (!db) return;
+
+        const now = new Date();
+        const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+        const brazilTime = new Date(utc - (3600000 * 3));
+        
+        // Verifica se é Segunda a Sexta (1=Seg, 5=Sex)
+        const dayOfWeek = brazilTime.getDay();
+        if (dayOfWeek < 1 || dayOfWeek > 5) return;
+
+        const currentHHMM = brazilTime.toISOString().slice(11, 16); // "HH:mm"
+
+        db.get("SELECT settings FROM user_settings WHERE id = 1", (e, r) => {
+            if (e || !r) return;
+            const settings = JSON.parse(r.settings);
+            
+            // Verifica se está configurado e se é o horário exato
+            if (!settings.dailySummaryNumber || !settings.dailySummaryTime) return;
+            
+            // Simples verificação de horário (Executa apenas no minuto exato)
+            if (settings.dailySummaryTime === currentHHMM) {
+                console.log(`[CRON ${user}] Iniciando resumo diário de tarefas para ${settings.dailySummaryNumber}`);
+                sendDailySummaryToUser(user);
+            }
+        });
+    });
+}, 60000); // Check every minute
+
+app.listen(port, () => console.log(`Server running at http://localhost:${port}`));

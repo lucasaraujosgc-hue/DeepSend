@@ -121,8 +121,8 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
         });
 
         if (result.success) {
-            // Fix: Explicitly cast result.sentIds to number[] to resolve unknown[] to number[] assignment error
-            const successIds: number[] = (result.sentIds as number[]) || [];
+            // Fix: Cast from any to number[] for successIds
+            const successIds = (result.sentIds || []) as number[];
             
             if (successIds.length > 0) {
                 onSendDocuments(successIds);
@@ -169,7 +169,7 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
 
           const payload: Partial<ScheduledMessage> = {
             title: subject,
-            message: message, 
+            message: message, // Removed the extra text
             nextRun: scheduleDate,
             recurrence: 'unico',
             active: true,

@@ -17,11 +17,11 @@ interface DocumentsProps {
 }
 
 interface PreviewFile {
-  id: string; // Temp ID
+  id: string; 
   file: File;
   fileName: string;
-  detectedCompanyId: number | null; // null if not found
-  detectedCategory: string | ''; // empty if not found
+  detectedCompanyId: number | null; 
+  detectedCategory: string | ''; 
   status: 'ready' | 'error' | 'ignored';
   size: number;
 }
@@ -45,22 +45,17 @@ const Documents: React.FC<DocumentsProps> = ({
 
   const [competence, setCompetence] = useState(getInitialCompetence());
   const [activeCompetence, setActiveCompetence] = useState(getInitialCompetence());
-  
   const [companies, setCompanies] = useState<Company[]>([]);
   const [dbStatuses, setDbStatuses] = useState<any[]>([]); 
   const [loading, setLoading] = useState(true);
 
-  // Processing State
   const [localPath, setLocalPath] = useState('');
   const [processingCompetence, setProcessingCompetence] = useState(getInitialCompetence());
   const [processing, setProcessing] = useState(false);
   const [isUploadingConfirmed, setIsUploadingConfirmed] = useState(false);
   
-  // Processing Filters
   const [processingCompanyId, setProcessingCompanyId] = useState<string>('');
   const [processingCategoryFilter, setProcessingCategoryFilter] = useState<string>('');
-
-  // Modal Preview State
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [previewFiles, setPreviewFiles] = useState<PreviewFile[]>([]);
 
@@ -70,8 +65,7 @@ const Documents: React.FC<DocumentsProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Combine Default + Custom Categories
-  const allCategories = [...DOCUMENT_CATEGORIES, ...(userSettings.customCategories || [])];
+  const allCategories = [...DOCUMENT_CATEGORIES, ...(userSettings?.customCategories || [])];
 
   const fetchData = async () => {
       setLoading(true);
@@ -80,8 +74,8 @@ const Documents: React.FC<DocumentsProps> = ({
               api.getCompanies(),
               api.getDocumentStatuses(activeCompetence)
           ]);
-          setCompanies(comps);
-          setDbStatuses(statuses);
+          setCompanies(comps || []);
+          setDbStatuses(statuses || []);
       } catch (error) {
           console.error("Error fetching documents data", error);
       } finally {
@@ -93,7 +87,7 @@ const Documents: React.FC<DocumentsProps> = ({
       fetchData();
   }, [activeCompetence]);
 
-  const visibleMatrixCategories = userSettings.visibleDocumentCategories.length > 0 
+  const visibleMatrixCategories = (userSettings?.visibleDocumentCategories && userSettings.visibleDocumentCategories.length > 0)
     ? userSettings.visibleDocumentCategories 
     : allCategories.slice(0, 8);
 
@@ -151,7 +145,6 @@ const Documents: React.FC<DocumentsProps> = ({
                 console.warn("PDF Read error", e); 
               }
           }
-          console.log(`--- Analisando: ${file.name} ---`);
           const textForAnalysis = removeAccents((pdfText + " " + file.name).toLowerCase());
           
           let detectedCompanyId: number | null = null;
@@ -166,7 +159,7 @@ const Documents: React.FC<DocumentsProps> = ({
           if (processingCategoryFilter) {
               detectedCategory = processingCategoryFilter;
           } else {
-              const category = identifyCategory(textForAnalysis, userSettings.categoryKeywords, userSettings.priorityCategories);
+              const category = identifyCategory(textForAnalysis, userSettings?.categoryKeywords || {}, userSettings?.priorityCategories || []);
               detectedCategory = category ?? 'Outros';
           }
 
@@ -219,7 +212,6 @@ const Documents: React.FC<DocumentsProps> = ({
                  } catch(e) { console.warn("Zip PDF Read error", e); }
             }
 
-            console.log(`--- Analisando ZIP item: ${simpleName} ---`);
             const textForAnalysis = removeAccents((pdfText + " " + simpleName).toLowerCase());
 
             let detectedCompanyId: number | null = null;
@@ -234,7 +226,7 @@ const Documents: React.FC<DocumentsProps> = ({
             if (processingCategoryFilter) {
                 detectedCategory = processingCategoryFilter;
             } else {
-                const category = identifyCategory(textForAnalysis, userSettings.categoryKeywords, userSettings.priorityCategories);
+                const category = identifyCategory(textForAnalysis, userSettings?.categoryKeywords || {}, userSettings?.priorityCategories || []);
                 detectedCategory = category ?? 'Outros';
             }
 
@@ -271,7 +263,7 @@ const Documents: React.FC<DocumentsProps> = ({
 
   const confirmProcessing = async () => {
       setIsUploadingConfirmed(true);
-      const calculatedDates = calcularTodosVencimentos(processingCompetence, userSettings.categoryRules);
+      const calculatedDates = calcularTodosVencimentos(processingCompetence, userSettings?.categoryRules || {});
       let processedCount = 0;
 
       for (const item of previewFiles) {
@@ -332,7 +324,7 @@ const Documents: React.FC<DocumentsProps> = ({
 
   const getMatrixCompanies = () => {
       return companies.filter(company => {
-          const matchesName = company.name.toLowerCase().includes(matrixSearch.toLowerCase());
+          const matchesName = (company.name || '').toLowerCase().includes(matrixSearch.toLowerCase());
           if (!matchesName) return false;
           if (matrixStatusFilter !== 'all') {
               const visibleCategories = getMatrixCategories();

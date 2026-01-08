@@ -21,16 +21,11 @@ const App: React.FC = () => {
   const [activePage, setActivePage] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   
-  // Lifted state for User Settings
+  // Inicia sempre com os padrões completos
   const [userSettings, setUserSettings] = useState<UserSettings>(DEFAULT_USER_SETTINGS);
-
-  // Lifted state for Documents (Shared between Documents, Upload, and Send)
   const [documents, setDocuments] = useState<Document[]>(MOCK_DOCUMENTS);
-
-  // State for pre-filling Upload form
   const [uploadPreFill, setUploadPreFill] = useState<{companyId: number, competence: string} | null>(null);
 
-  // Check for stored token on mount
   useEffect(() => {
     const token = localStorage.getItem('cm_auth_token');
     if (token) {
@@ -38,13 +33,19 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Fetch Settings on Auth
   useEffect(() => {
     if (isAuthenticated) {
         api.getSettings().then(settings => {
-            if (settings) {
-                // Merge with defaults to ensure all fields exist (in case of schema updates)
-                setUserSettings(prev => ({ ...prev, ...settings }));
+            if (settings && typeof settings === 'object') {
+                setUserSettings(prev => ({
+                    ...prev,
+                    ...settings,
+                    // Garante que sub-objetos críticos não sumam se o merge for parcial
+                    categoryKeywords: { ...prev.categoryKeywords, ...(settings.categoryKeywords || {}) },
+                    categoryRules: { ...prev.categoryRules, ...(settings.categoryRules || {}) },
+                    priorityCategories: settings.priorityCategories || prev.priorityCategories || [],
+                    visibleDocumentCategories: settings.visibleDocumentCategories || prev.visibleDocumentCategories || []
+                }));
             }
         }).catch(err => console.error("Failed to load settings", err));
     }
@@ -76,7 +77,6 @@ const App: React.FC = () => {
     setActivePage('documents');
   }
 
-  // Handle new file upload from Upload tab
   const handleUploadSuccess = (files: UploadedFile[], companyId: number, competence: string) => {
       const newDocs: Document[] = files.map(f => ({
           id: Date.now() + Math.random(),
@@ -86,14 +86,13 @@ const App: React.FC = () => {
           dueDate: f.dueDate,
           status: 'pending', 
           companyId: companyId,
-          companyName: 'Loading...', // Should be resolved locally or via api fetch if critical
+          companyName: 'Loading...', 
           file: f.file,
-          serverFilename: f.serverFilename // Crucial for sending
+          serverFilename: f.serverFilename
       }));
       setDocuments(prev => [...prev, ...newDocs]);
   };
 
-  // Toggle status in Matrix (Visual manual override)
   const handleToggleStatus = (companyId: number, category: string, competence: string) => {
       setDocuments(prev => {
           const existingIndex = prev.findIndex(d => 
@@ -103,7 +102,6 @@ const App: React.FC = () => {
           );
 
           if (existingIndex >= 0) {
-              // Toggle existing
               const newDocs = [...prev];
               newDocs[existingIndex] = {
                   ...newDocs[existingIndex],
@@ -111,7 +109,6 @@ const App: React.FC = () => {
               };
               return newDocs;
           } else {
-              // Create manual entry
               const newDoc: Document = {
                   id: Date.now(),
                   name: `Manual - ${category}`,
@@ -128,9 +125,7 @@ const App: React.FC = () => {
       });
   };
 
-  // Handle Sending from Send Tab
   const handleSendDocuments = (docIds: number[]) => {
-      // Aqui só atualizamos status, não removemos se falhar.
       setDocuments(prev => prev.map(doc => {
           if (docIds.includes(doc.id)) {
               return { ...doc, status: 'sent' };
@@ -139,14 +134,12 @@ const App: React.FC = () => {
       }));
   };
 
-  // Handle Delete Single Document
   const handleDeleteDocument = (id: number) => {
       if(window.confirm("Tem certeza que deseja remover este arquivo da lista de envio?")) {
           setDocuments(prev => prev.filter(d => d.id !== id));
       }
   };
 
-  // Handle Clear All Pending Documents (for current view usually, but here clears all pending)
   const handleClearPendingDocuments = (competenceFilter: string) => {
       if(window.confirm(`Tem certeza que deseja excluir TODOS os arquivos pendentes da competência ${competenceFilter}?`)) {
           setDocuments(prev => prev.filter(d => !(d.status === 'pending' && d.competence === competenceFilter)));
