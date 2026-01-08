@@ -18,6 +18,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+// Porta do servidor web (Express)
 const port = process.env.PORT || 3000;
 
 // Configuração de diretórios
@@ -26,6 +27,20 @@ const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+// --- CONFIGURAÇÃO DE E-MAIL (NODEMAILER) ---
+// Utiliza as variáveis definidas no seu .env
+const emailPort = parseInt(process.env.EMAIL_PORT || '465');
+
+const emailTransporter = nodemailer.createTransport({
+  host: process.env.EMAIL_HOST, // smtp.hostinger.com
+  port: emailPort,              // 465
+  secure: emailPort === 465,    // true se for 465 (SSL)
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+});
 
 // --- MULTI-TENANCY: Database Management ---
 const dbInstances = {};
@@ -155,36 +170,6 @@ const getWaClientWrapper = (username) => {
     return waClients[username];
 };
 
-// --- RESTO DO SERVER (Simplificado para o exemplo) ---
-const sendDailySummaryToUser = async (user) => {
-    const db = getDb(user);
-    if (!db) return;
-    const waWrapper = getWaClientWrapper(user);
-    if (waWrapper.status !== 'connected') return { success: false, message: 'WhatsApp desconectado' };
-
-    return new Promise((resolve) => {
-        db.get("SELECT settings FROM user_settings WHERE id = 1", (e, r) => {
-            if (e || !r) return resolve({ success: false });
-            const settings = JSON.parse(r.settings);
-            const sql = `SELECT t.*, c.name as companyName FROM tasks t LEFT JOIN companies c ON t.companyId = c.id WHERE t.status != 'concluida'`;
-            db.all(sql, [], async (err, tasks) => {
-                if (err || !tasks.length) return resolve({ success: true });
-                let message = `*📅 Resumo Diário de Tarefas*\n\n`;
-                tasks.forEach(task => {
-                    let icon = task.priority === 'alta' ? '🔴' : (task.priority === 'media' ? '🟡' : '🔵');
-                    message += `${icon} *${task.title}*\n${task.companyName ? `   🏢 ${task.companyName}\n` : ''}${task.dueDate ? `   📅 Vence: ${task.dueDate}\n` : ''}\n`;
-                });
-                try {
-                    let number = settings.dailySummaryNumber.replace(/\D/g, '');
-                    if (!number.startsWith('55')) number = '55' + number;
-                    await waWrapper.client.sendMessage(`${number}@c.us`, message);
-                    resolve({ success: true });
-                } catch (sendErr) { resolve({ success: false }); }
-            });
-        });
-    });
-};
-
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -200,11 +185,6 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname.replace(/[^a-zA-Z0-9.]/g, '_'))
 });
 const upload = multer({ storage });
-
-const emailTransporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com', port: 465, secure: true,
-    auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
-});
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -259,6 +239,110 @@ app.post('/api/whatsapp/disconnect', async (req, res) => {
     if (w.client) await w.client.logout();
     w.status = 'disconnected'; w.qr = null;
     res.json({ success: true });
+});
+
+// --- ROTA DE ENVIO DE DOCUMENTOS (Exemplo Simplificado com o novo Transporter) ---
+app.post('/api/send-documents', async (req, res) => {
+    const { documents, subject, messageBody, channels, emailSignature, whatsappTemplate } = req.body;
+    const db = getDb(req.user);
+    const waWrapper = getWaClientWrapper(req.user);
+    
+    let sentCount = 0;
+    let errors = [];
+    let sentIds = [];
+
+    // Agrupa documentos por empresa
+    const docsByCompany = documents.reduce((acc, doc) => {
+        if (!acc[doc.companyId]) acc[doc.companyId] = [];
+        acc[doc.companyId].push(doc);
+        return acc;
+    }, {});
+
+    for (const companyId in docsByCompany) {
+        const companyDocs = docsByCompany[companyId];
+        // Busca dados da empresa para ter email/zap atualizados
+        const company = await new Promise((resolve) => {
+            db.get("SELECT * FROM companies WHERE id = ?", [companyId], (err, row) => resolve(row));
+        });
+
+        if (!company) continue;
+
+        // Prepara Anexos
+        const attachments = companyDocs.map(doc => ({
+            filename: doc.docName,
+            path: path.join(UPLOADS_DIR, doc.serverFilename)
+        })).filter(a => fs.existsSync(a.path));
+
+        let sentToCompany = false;
+
+        // 1. Envio por E-mail
+        if (channels.email && company.email) {
+            try {
+                let htmlBody = messageBody.replace(/\n/g, '<br>');
+                if (emailSignature) {
+                    htmlBody += `<br><br>${emailSignature.replace('{mensagem_html}', '')}`;
+                }
+
+                await emailTransporter.sendMail({
+                    from: `"Contábil Manager" <${process.env.EMAIL_USER}>`,
+                    to: company.email,
+                    subject: subject,
+                    html: htmlBody,
+                    attachments: attachments
+                });
+                sentToCompany = true;
+            } catch (e) {
+                console.error(`Erro envio email ${company.name}:`, e);
+                errors.push(`Email falhou para ${company.name}: ${e.message}`);
+            }
+        }
+
+        // 2. Envio por WhatsApp
+        if (channels.whatsapp && company.whatsapp && waWrapper.status === 'connected') {
+            try {
+                let number = company.whatsapp.replace(/\D/g, '');
+                if (!number.startsWith('55')) number = '55' + number;
+                const chatId = `${number}@c.us`;
+
+                let waMessage = `*${subject}*\n\n${messageBody}`;
+                if (whatsappTemplate) {
+                    waMessage += `\n\n${whatsappTemplate}`;
+                }
+
+                await waWrapper.client.sendMessage(chatId, waMessage);
+
+                // Envia arquivos
+                for (const att of attachments) {
+                    const media = MessageMedia.fromFilePath(att.path);
+                    media.filename = att.filename;
+                    await waWrapper.client.sendMessage(chatId, media);
+                }
+                sentToCompany = true;
+            } catch (e) {
+                console.error(`Erro envio whats ${company.name}:`, e);
+                errors.push(`WhatsApp falhou para ${company.name}`);
+            }
+        }
+
+        // Atualiza status se enviou por pelo menos um canal
+        if (sentToCompany) {
+            sentCount++;
+            companyDocs.forEach(doc => {
+                sentIds.push(doc.id);
+                // Log
+                db.run(`INSERT INTO sent_logs (companyName, docName, category, sentAt, channels, status) VALUES (?, ?, ?, ?, ?, ?)`, 
+                    [company.name, doc.docName, doc.category, new Date().toISOString(), JSON.stringify(channels), 'success']);
+                
+                // Atualiza status do documento
+                if (doc.category && doc.competence) {
+                    db.run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, ?) ON CONFLICT(companyId, category, competence) DO UPDATE SET status='sent'`,
+                        [companyId, doc.category, doc.competence, 'sent']);
+                }
+            });
+        }
+    }
+
+    res.json({ success: true, sent: sentCount, sentIds, errors });
 });
 
 app.get(/.*/, (req, res) => {
