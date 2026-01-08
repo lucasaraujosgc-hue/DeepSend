@@ -104,13 +104,11 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
   const processFiles = async (fileList: File[]) => {
     setIsProcessing(true);
     
-    // Process files sequentially or in parallel, but await text extraction
     const newFiles: UploadedFile[] = [];
 
     for (const file of fileList) {
         let pdfText = "";
 
-        // Se for PDF, tenta extrair o texto
         if (file.type === 'application/pdf') {
             try {
                 pdfText = await extractTextFromPDF(file);
@@ -119,12 +117,15 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
             }
         }
 
-        // NORMALIZAÇÃO UNIFICADA
-        const textForAnalysis = removeAccents((pdfText + " " + file.name).toLowerCase());
+        // Normaliza o texto extraído E o nome do arquivo para busca
+        const combinedText = removeAccents(pdfText + " " + file.name);
         
-        // Pass user settings priority
-        // Assume normalized text input now
-        const identified = identifyCategory(textForAnalysis, userSettings.categoryKeywords, userSettings.priorityCategories);
+        // Chama a identificação aprimorada com pontuação e prioridades
+        const identified = identifyCategory(
+            combinedText, 
+            userSettings.categoryKeywords, 
+            userSettings.priorityCategories
+        );
         
         let category = identified ?? 'Outros';
         
@@ -166,6 +167,8 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
         return;
     }
     
+    if (files.length === 0) return;
+
     setIsUploading(true);
     try {
         const uploadedFilesWithServerNames = await Promise.all(files.map(async (f) => {
@@ -207,7 +210,7 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
       </div>
 
       {isSuccess && (
-        <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded relative" role="alert">
+        <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded relative animate-in slide-in-from-top-2" role="alert">
             <strong className="font-bold">Sucesso!</strong>
             <span className="block sm:inline"> Arquivos enviados com sucesso para a aba de Envio.</span>
         </div>
@@ -224,7 +227,7 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
                         Empresa {loadingCompanies && <Loader2 className="w-3 h-3 animate-spin" />}
                     </label>
                     <select 
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 transition-all"
                         value={selectedCompanyId}
                         onChange={e => setSelectedCompanyId(e.target.value)}
                         disabled={loadingCompanies}
@@ -241,13 +244,13 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
                         <button 
                             type="button"
                             onClick={() => changeCompetence(-1)}
-                            className="p-2 border border-gray-300 rounded-l-lg hover:bg-gray-100"
+                            className="p-2 border border-gray-300 rounded-l-lg hover:bg-gray-100 transition-colors"
                         >
                             <ChevronLeft className="w-4 h-4" />
                         </button>
                         <input 
                             type="text"
-                            className="w-full border-y border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-center"
+                            className="w-full border-y border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-center font-medium"
                             placeholder="MM/AAAA"
                             value={competence}
                             onChange={e => {
@@ -259,7 +262,7 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
                         <button 
                             type="button"
                             onClick={() => changeCompetence(1)}
-                            className="p-2 border border-gray-300 rounded-r-lg hover:bg-gray-100"
+                            className="p-2 border border-gray-300 rounded-r-lg hover:bg-gray-100 transition-colors"
                         >
                             <ChevronRight className="w-4 h-4" />
                         </button>
@@ -269,8 +272,8 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
         </div>
 
         <div 
-            className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center text-center transition-colors
-                ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-blue-400 bg-gray-50'}`}
+            className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center text-center transition-all duration-200
+                ${isDragging ? 'border-blue-500 bg-blue-50 scale-[1.02]' : 'border-gray-300 hover:border-blue-400 bg-gray-50'}`}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
@@ -281,56 +284,74 @@ const Upload: React.FC<UploadProps> = ({ preFillData, onUploadSuccess, userSetti
             <h3 className="text-lg font-semibold text-gray-800">Arraste arquivos aqui</h3>
             <p className="text-gray-500 mb-4">ou clique para selecionar do computador</p>
             <input type="file" multiple className="hidden" id="file-input" onChange={handleFileSelect} />
-            <label htmlFor="file-input" className="bg-blue-600 text-white px-6 py-2 rounded-lg cursor-pointer hover:bg-blue-700 transition-colors">
+            <label htmlFor="file-input" className="bg-blue-600 text-white px-6 py-2 rounded-lg cursor-pointer hover:bg-blue-700 transition-all shadow-md hover:shadow-lg">
                 Selecionar Arquivos
             </label>
         </div>
       </div>
 
       {isProcessing && (
-          <div className="text-center p-4">
-              <Loader2 className="w-8 h-8 animate-spin mx-auto text-blue-500" />
-              <p className="text-sm text-gray-500 mt-2">Lendo arquivos e identificando categorias...</p>
+          <div className="text-center p-8 bg-white rounded-xl border border-gray-100 shadow-sm animate-pulse">
+              <Loader2 className="w-10 h-10 animate-spin mx-auto text-blue-500 mb-3" />
+              <p className="text-gray-600 font-medium">Analisando documentos e aplicando suas regras de vinculação...</p>
           </div>
       )}
 
       {files.length > 0 && !isProcessing && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-              <div className="p-4 border-b border-gray-100 bg-gray-50">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="p-4 border-b border-gray-100 bg-gray-50 flex justify-between items-center">
                   <h3 className="font-bold text-gray-700">Arquivos Selecionados ({files.length})</h3>
+                  <p className="text-xs text-gray-500 italic">Dica: Categorias marcadas com Estrela nas configurações têm prioridade.</p>
               </div>
               <div className="p-4 space-y-3">
                   {files.map((file, idx) => (
-                      <div key={idx} className="flex flex-col md:flex-row gap-4 p-4 border border-gray-200 rounded-lg bg-white items-start md:items-center">
+                      <div key={idx} className="flex flex-col md:flex-row gap-4 p-4 border border-gray-200 rounded-lg bg-white items-start md:items-center hover:border-blue-200 transition-all group">
                           <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 mb-1">
-                                  <FileText className="w-4 h-4 text-gray-400" />
-                                  <span className="font-medium text-gray-800 truncate">{file.name}</span>
+                                  <FileText className="w-4 h-4 text-gray-400 group-hover:text-blue-500 transition-colors" />
+                                  <span className="font-medium text-gray-800 truncate" title={file.name}>{file.name}</span>
                               </div>
                               <span className="text-xs text-gray-500">{formatSize(file.size)}</span>
                           </div>
                           <div className="flex-1 w-full md:w-auto">
-                              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Categoria</label>
-                              <select className="w-full text-sm border-gray-300 rounded px-2 py-1.5 border" value={file.category} onChange={(e) => updateFileCategory(idx, e.target.value)}>
+                              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Categoria Identificada</label>
+                              <select 
+                                className={`w-full text-sm rounded px-2 py-1.5 border transition-all ${file.category === 'Outros' ? 'border-yellow-300 bg-yellow-50' : 'border-gray-300 focus:border-blue-500'}`} 
+                                value={file.category} 
+                                onChange={(e) => updateFileCategory(idx, e.target.value)}
+                              >
                                   {allCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                               </select>
                           </div>
                           <div className="w-full md:w-40">
-                              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Vencimento</label>
-                              <input type="text" className="w-full text-sm border-gray-300 rounded px-2 py-1.5 border" value={file.dueDate} placeholder="DD/MM/AAAA" onChange={(e) => { const newFiles = [...files]; newFiles[idx].dueDate = e.target.value; setFiles(newFiles); }} />
+                              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Data de Vencimento</label>
+                              <div className="relative">
+                                <Calendar className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" />
+                                <input 
+                                    type="text" 
+                                    className="w-full text-sm border-gray-300 rounded pl-7 pr-2 py-1.5 border focus:ring-1 focus:ring-blue-500 outline-none" 
+                                    value={file.dueDate} 
+                                    placeholder="DD/MM/AAAA" 
+                                    onChange={(e) => { 
+                                        const newFiles = [...files]; 
+                                        newFiles[idx].dueDate = e.target.value; 
+                                        setFiles(newFiles); 
+                                    }} 
+                                />
+                              </div>
                           </div>
-                          <button onClick={() => removeFile(idx)} className="text-gray-400 hover:text-red-500 p-2"><X className="w-5 h-5" /></button>
+                          <button onClick={() => removeFile(idx)} className="text-gray-400 hover:text-red-500 p-2 hover:bg-red-50 rounded-full transition-all" title="Remover"><X className="w-5 h-5" /></button>
                       </div>
                   ))}
               </div>
-              <div className="p-4 border-t border-gray-100 flex justify-end">
+              <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end">
                   <button 
                     onClick={handleUploadClick}
-                    disabled={isUploading}
-                    className="bg-green-600 text-white px-8 py-3 rounded-lg hover:bg-green-700 shadow-lg shadow-green-900/20 font-medium flex items-center gap-2 disabled:opacity-70"
+                    disabled={isUploading || files.length === 0}
+                    className="bg-green-600 text-white px-8 py-3 rounded-lg hover:bg-green-700 shadow-lg hover:shadow-green-500/30 font-bold flex items-center gap-2 disabled:opacity-70 transition-all transform active:scale-95"
                   >
                       {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <UploadIcon className="w-5 h-5" />}
-                      {isUploading ? 'Enviando...' : 'Enviar Todos'}
+                      {isUploading ? 'Processando Envio...' : 'Confirmar e Enviar Todos'}
                   </button>
               </div>
           </div>

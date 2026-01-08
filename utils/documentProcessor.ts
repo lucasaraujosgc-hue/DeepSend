@@ -6,22 +6,40 @@ import * as pdfjsLib from 'pdfjs-dist';
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 /**
- * Normalizes text to remove accents (NFD normalization).
+ * Normaliza o texto: remove acentos, converte para minúsculo e limpa espaços extras.
  */
 export const removeAccents = (text: string): string => {
   if (!text) return "";
-  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
 };
 
 /**
- * Extracts text content from a PDF file.
- * Includes CMap configuration to handle governmental PDFs correctly.
+ * Verifica se uma palavra-chave existe no texto como uma "palavra isolada" 
+ * ou termo significativo, evitando matches dentro de outras palavras (ex: 'das' em 'vendas').
+ */
+const containsKeyword = (text: string, keyword: string): boolean => {
+  if (!keyword || keyword.length < 2) return false;
+  
+  // Para palavras curtas (<= 3 letras), exigimos que sejam palavras isoladas
+  if (keyword.length <= 3) {
+    const regex = new RegExp(`(^|[^a-z0-9])${keyword}([^a-z0-9]|$)`, 'i');
+    return regex.test(text);
+  }
+  
+  // Para termos mais longos, a inclusão simples costuma ser segura o suficiente
+  return text.includes(keyword);
+};
+
+/**
+ * Extrai texto de um PDF de forma robusta.
  */
 export const extractTextFromPDF = async (file: File): Promise<string> => {
   try {
     const arrayBuffer = await file.arrayBuffer();
-
-    // Configuração robusta para carregar fontes customizadas (comuns em guias de governo)
     const loadingTask = pdfjsLib.getDocument({
       data: arrayBuffer,
       cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
@@ -31,31 +49,28 @@ export const extractTextFromPDF = async (file: File): Promise<string> => {
 
     const pdf = await loadingTask.promise;
     let fullText = '';
-
-    // Lê até 3 páginas para garantir que pegamos cabeçalhos e rodapés
-    const maxPages = Math.min(pdf.numPages, 3);
+    const maxPages = Math.min(pdf.numPages, 5); // Lê até 5 páginas para maior precisão
 
     for (let i = 1; i <= maxPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-
       const pageText = textContent.items
         .map((item: any) => item.str)
-        .join(' ') // Join with space to prevent glued words like "CNPJ:123"
+        .join(' ')
         .trim();
-
       fullText += pageText + ' ';
     }
 
     return fullText.trim(); 
   } catch (error) {
-    console.error(`❌ Erro CRÍTICO ao extrair texto do PDF: ${file.name}`, error);
+    console.error(`❌ Erro ao extrair texto do PDF: ${file.name}`, error);
     return '';
   }
 };
 
 /**
- * Identifies the category based on text content.
+ * Identifica a categoria baseada em um sistema de pontuação e pesos.
+ * Obedece estritamente as configurações de prioridade do usuário.
  */
 export const identifyCategory = (
     textNormalized: string, 
@@ -63,103 +78,89 @@ export const identifyCategory = (
     priorityCategories: string[] = []
 ): string | null => {
   
-  const matchedCategories: string[] = [];
+  const scores: Record<string, number> = {};
 
-  // 1. Scan User Keywords (Dynamic)
+  // 1. Calcular pontuação para cada categoria
   for (const [category, keywords] of Object.entries(keywordMap)) {
     if (!keywords || !Array.isArray(keywords)) continue;
+    
+    let categoryScore = 0;
     
     for (const keyword of keywords) {
       if (!keyword) continue;
       const kwNormalized = removeAccents(keyword);
-      // Check: keyword must be at least 3 chars to avoid noise
-      if (kwNormalized.length > 2 && textNormalized.includes(kwNormalized)) {
-        if (!matchedCategories.includes(category)) {
-            matchedCategories.push(category);
-        }
-        break; 
+      
+      if (containsKeyword(textNormalized, kwNormalized)) {
+        // Pontuação baseada no tamanho da keyword (palavras maiores = mais certeza)
+        // Adicionamos um multiplicador para dar peso a termos compostos
+        categoryScore += (kwNormalized.length * 2);
       }
+    }
+
+    if (categoryScore > 0) {
+      // 2. Aplicar bônus massivo se a categoria for PRIORIDADE (Estrela nas configurações)
+      if (priorityCategories.includes(category)) {
+        categoryScore += 1000; // Garante que prioridades vençam quase qualquer conflito
+      }
+      scores[category] = categoryScore;
     }
   }
 
-  // 2. Resolve Conflict using Priority
-  if (matchedCategories.length > 1) {
-      const priorityMatch = matchedCategories.find(cat => priorityCategories.includes(cat));
-      if (priorityMatch) return priorityMatch;
+  // 3. Encontrar a categoria com maior pontuação
+  const sortedCategories = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+
+  if (sortedCategories.length > 0) {
+    const [bestCategory, bestScore] = sortedCategories[0];
+    console.log(`[Processor] Scores:`, scores, `-> Escolhido: ${bestCategory}`);
+    return bestCategory;
   }
 
-  return matchedCategories[0] || null;
+  return null;
 };
 
 /**
- * Identifies the company using Numeric Match OR Smart Name Match.
+ * Identifica a empresa usando match numérico (CNPJ/CPF) ou nome inteligente.
  */
 export const identifyCompany = (textNormalized: string, companies: Company[]): Company | null => {
   if (!textNormalized) return null;
 
-  // 1. LIMPEZA TOTAL PARA NUMEROS
-  // Remove tudo que não é dígito para buscar CNPJ/CPF "corrido"
   const textOnlyNumbers = textNormalized.replace(/\D/g, '');
 
+  // 1. Prioridade Total: Match Numérico
   for (const company of companies) {
     const companyDocClean = company.docNumber.replace(/\D/g, '');
-    
-    if (companyDocClean.length < 5) continue; // Ignora docs inválidos
+    if (companyDocClean.length < 5) continue;
 
-    // A. Match Numérico Exato (CNPJ completo)
-    if (textOnlyNumbers.includes(companyDocClean)) {
+    // Match exato ou Raiz CNPJ (8 dígitos)
+    if (textOnlyNumbers.includes(companyDocClean) || 
+       (companyDocClean.length >= 8 && textOnlyNumbers.includes(companyDocClean.substring(0, 8)))) {
         return company;
-    }
-
-    // B. Match Raiz CNPJ (8 primeiros dígitos)
-    // Ex: PDF tem 36662174 (raiz) mas no banco é 366621740001XX
-    if (companyDocClean.length >= 8) {
-        const root = companyDocClean.substring(0, 8);
-        if (textOnlyNumbers.includes(root)) {
-            return company;
-        }
     }
   }
 
-  // 2. ESTRATÉGIA POR NOME (Parcial e Inteligente)
-  const commonTerms = ['ltda', 's.a', 'me', 'epp', 'eireli', 'limitada', 'sa', '-', 'cpf:', 'cnpj:', 'do', 'da', 'de'];
+  // 2. Match por Nome (Lógica aprimorada)
+  const commonTerms = ['ltda', 's.a', 'me', 'epp', 'eireli', 'limitada', 'sa', 'cnpj', 'cpf'];
   
+  let bestMatch: Company | null = null;
+  let maxNameScore = 0;
+
   for (const company of companies) {
     let nameClean = removeAccents(company.name);
-    
-    // Remove termos comuns para limpar o nome
     commonTerms.forEach(term => {
         nameClean = nameClean.replace(new RegExp(`\\b${term}\\b`, 'g'), '').trim();
     });
 
     if (nameClean.length < 3) continue;
 
-    // A. Match Nome Limpo Completo
-    // Ex: "VM INSTALACOES ELETRICAS"
+    // Se o nome completo limpo está no texto
     if (textNormalized.includes(nameClean)) {
-      return company;
-    }
-
-    // B. Match PRIMEIRAS DUAS PALAVRAS (Crucial para nomes longos ou quebrados)
-    // Ex: No PDF: "VM INSTALACOES" ... quebra de linha ...
-    //     No Banco: "VM INSTALACOES ELETRICAS LTDA"
-    const parts = nameClean.split(/\s+/); // Split por qualquer espaço
-    if (parts.length >= 2) {
-        const firstTwoWords = `${parts[0]} ${parts[1]}`;
-        // Só aceita se as duas palavras somadas tiverem tamanho seguro (> 4 chars)
-        if (firstTwoWords.length > 4 && textNormalized.includes(firstTwoWords)) {
-            return company;
-        }
-    }
-    
-    // C. Match ÚNICA PALAVRA (Apenas se for uma palavra muito específica e longa)
-    // Ex: "MICROSOFT"
-    if (parts.length === 1 && parts[0].length > 6) {
-        if (textNormalized.includes(parts[0])) {
-            return company;
-        }
+      const score = nameClean.length;
+      if (score > maxNameScore) {
+        maxNameScore = score;
+        bestMatch = company;
+      }
     }
   }
 
-  return null;
+  return bestMatch;
 };
