@@ -35,7 +35,7 @@ const emailPort = parseInt(process.env.EMAIL_PORT || '465');
 const emailTransporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST, // smtp.hostinger.com
   port: emailPort,              // 465
-  secure: emailPort === 465,    // true se for 465 (SSL)
+  secure: emailPort === 465,    // true para porta 465
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
@@ -80,14 +80,16 @@ const getDb = (username) => {
 // --- MULTI-TENANCY: WhatsApp Management ---
 const waClients = {};
 
-const cleanPuppeteerLocks = (authPath) => {
+const cleanPuppeteerLocks = (sessionDir) => {
+    // Estrutura do LocalAuth: DATA_DIR/session-{username}/Default
+    // Precisamos limpar as travas tanto na raiz da sessão quanto na pasta Default
+    const dirsToClean = [sessionDir, path.join(sessionDir, 'Default')];
     const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
-    const defaultProfilePath = path.join(authPath, 'Default');
     
-    [authPath, defaultProfilePath].forEach(p => {
-        if (fs.existsSync(p)) {
+    dirsToClean.forEach(dir => {
+        if (fs.existsSync(dir)) {
             lockFiles.forEach(file => {
-                const lockPath = path.join(p, file);
+                const lockPath = path.join(dir, file);
                 if (fs.existsSync(lockPath)) {
                     try {
                         fs.unlinkSync(lockPath);
@@ -112,11 +114,13 @@ const getWaClientWrapper = (username) => {
             info: null
         };
 
-        const authPath = path.join(DATA_DIR, `whatsapp_auth_${username}`);
-        if (!fs.existsSync(authPath)) fs.mkdirSync(authPath, { recursive: true });
-
-        // IMPORTANTE: Limpar travas antes de iniciar
-        cleanPuppeteerLocks(authPath);
+        // Caminho real usado pelo LocalAuth
+        const sessionPath = path.join(DATA_DIR, `session-${username}`);
+        
+        // IMPORTANTE: Limpar travas antes de iniciar se a pasta existir
+        if (fs.existsSync(sessionPath)) {
+            cleanPuppeteerLocks(sessionPath);
+        }
 
         const puppeteerExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
         
@@ -241,7 +245,7 @@ app.post('/api/whatsapp/disconnect', async (req, res) => {
     res.json({ success: true });
 });
 
-// --- ROTA DE ENVIO DE DOCUMENTOS (Exemplo Simplificado com o novo Transporter) ---
+// --- ROTA DE ENVIO DE DOCUMENTOS ---
 app.post('/api/send-documents', async (req, res) => {
     const { documents, subject, messageBody, channels, emailSignature, whatsappTemplate } = req.body;
     const db = getDb(req.user);
