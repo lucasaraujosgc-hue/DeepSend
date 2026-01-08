@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, Plus, Building2, User, Copy, Check, X, Upload, Pencil, Trash, Loader2 } from 'lucide-react';
 import { Company } from '../types';
@@ -248,7 +249,7 @@ const Companies: React.FC = () => {
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex flex-col">
-                      <span className="text-gray-900">{company.email}</span>
+                      <span className="text-gray-900 max-w-[200px] truncate" title={company.email}>{company.email}</span>
                       <span className="text-gray-500 text-xs">{company.whatsapp}</span>
                     </div>
                   </td>
@@ -323,13 +324,15 @@ const Companies: React.FC = () => {
                 </div>
 
                 <div>
-                   <label className="block text-sm font-semibold text-gray-700 mb-1">E-mail</label>
+                   <label className="block text-sm font-semibold text-gray-700 mb-1">E-mail(s)</label>
                    <input 
-                      type="email" 
+                      type="text" 
                       className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
                       value={newCompany.email}
                       onChange={(e) => setNewCompany({...newCompany, email: e.target.value})}
+                      placeholder="email1@exemplo.com, email2@exemplo.com"
                    />
+                   <p className="text-xs text-gray-500 mt-1">Para enviar para múltiplos e-mails, separe por vírgula.</p>
                 </div>
 
                 <div>

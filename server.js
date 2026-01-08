@@ -592,13 +592,22 @@ app.post('/api/send-documents', async (req, res) => {
                 try {
                     const finalHtml = buildEmailHtml(messageBody, companyDocs, emailSignature);
                     const finalSubject = `${subject} - Competência: ${companyDocs[0].competence || 'N/A'}`; 
-                    await emailTransporter.sendMail({
-                        from: process.env.EMAIL_USER,
-                        to: company.email,
-                        subject: finalSubject,
-                        html: finalHtml,
-                        attachments: validAttachments.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
-                    });
+                    
+                    // --- MÚLTIPLOS E-MAILS (COM CÓPIA) ---
+                    const emailList = company.email.split(',').map(e => e.trim()).filter(e => e);
+                    const mainEmail = emailList[0];
+                    const ccEmails = emailList.slice(1).join(', ');
+
+                    if (mainEmail) {
+                        await emailTransporter.sendMail({
+                            from: process.env.EMAIL_USER,
+                            to: mainEmail,
+                            cc: ccEmails, // Envia os demais como cópia
+                            subject: finalSubject,
+                            html: finalHtml,
+                            attachments: validAttachments.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
+                        });
+                    }
                 } catch (e) { errors.push(`Erro Email ${company.name}: ${e.message}`); }
             }
 
@@ -738,13 +747,21 @@ setInterval(() => {
                                 ? buildEmailHtml(msg.message, companySpecificDocs, settings?.emailSignature)
                                 : buildEmailHtml(msg.message, [], settings?.emailSignature);
 
-                             await emailTransporter.sendMail({
-                                from: process.env.EMAIL_USER,
-                                to: company.email,
-                                subject: msg.title,
-                                html: htmlContent,
-                                attachments: attachmentsToSend.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
-                            });
+                             // --- MÚLTIPLOS E-MAILS (COM CÓPIA) ---
+                             const emailList = company.email.split(',').map(e => e.trim()).filter(e => e);
+                             const mainEmail = emailList[0];
+                             const ccEmails = emailList.slice(1).join(', ');
+
+                             if (mainEmail) {
+                                await emailTransporter.sendMail({
+                                    from: process.env.EMAIL_USER,
+                                    to: mainEmail,
+                                    cc: ccEmails,
+                                    subject: msg.title,
+                                    html: htmlContent,
+                                    attachments: attachmentsToSend.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
+                                });
+                             }
                         } catch(e) { console.error(`[CRON] Erro email ${company.name}`, e); }
                     }
 
