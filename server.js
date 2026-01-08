@@ -29,7 +29,7 @@ if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 // --- HELPER: Puppeteer Lock Cleaner (CORREÇÃO DE ERRO CODE 21) ---
 const cleanPuppeteerLocks = (dir) => {
-    // Lista de arquivos de trava que o Chrome cria
+    // Lista de arquivos de trava que o Chrome cria e esquece de deletar
     const locks = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
     
     if (fs.existsSync(dir)) {
@@ -125,7 +125,7 @@ const getWaClientWrapper = (username) => {
         if (!fs.existsSync(authPath)) fs.mkdirSync(authPath, { recursive: true });
 
         // --- FIX: Limpar travas antes de iniciar o Puppeteer ---
-        // LocalAuth cria uma pasta session-{clientId} dentro do authPath
+        // A lib LocalAuth cria uma pasta 'session-{clientId}' dentro de authPath
         const sessionPath = path.join(authPath, `session-${username}`);
         cleanPuppeteerLocks(sessionPath);
 
@@ -136,7 +136,7 @@ const getWaClientWrapper = (username) => {
             puppeteer: {
                 headless: true,
                 executablePath: puppeteerExecutablePath,
-                // Argumentos críticos para rodar em Docker/Easypanel sem crashar
+                // Argumentos essenciais para rodar no Docker/Easypanel sem crashar
                 args: [
                     '--no-sandbox', 
                     '--disable-setuid-sandbox', 
@@ -318,10 +318,9 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 // --- CONFIGURAÇÃO EMAIL (HOSTINGER / GMAIL) ---
-// Usa variáveis de ambiente para Hostinger, com fallback para Gmail
 const emailPort = parseInt(process.env.EMAIL_PORT || '465');
 const emailTransporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST || 'smtp.gmail.com', // Flexível para Hostinger
+    host: process.env.EMAIL_HOST || 'smtp.gmail.com', // Fallback para Gmail se não configurado
     port: emailPort,
     secure: emailPort === 465, // true para 465, false para outras
     auth: {
