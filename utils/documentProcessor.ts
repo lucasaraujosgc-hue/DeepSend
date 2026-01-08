@@ -2,14 +2,17 @@
 import { Company } from '../types';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Configura o Worker de forma segura para evitar erros de inicialização que travam o app
-try {
-  if (pdfjsLib && pdfjsLib.GlobalWorkerOptions) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-  }
-} catch (e) {
-  console.error("Erro ao configurar Worker do PDF.js:", e);
-}
+// Configuração segura e isolada do Worker
+const setupPdfWorker = () => {
+    try {
+        if (typeof window !== 'undefined' && pdfjsLib.GlobalWorkerOptions) {
+            // Usamos a versão que já está no import map ou uma CDN segura
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
+    } catch (e) {
+        console.error("Erro ao configurar Worker do PDF.js:", e);
+    }
+};
 
 /**
  * Normaliza o texto: remove acentos, converte para minúsculo e limpa espaços extras.
@@ -29,7 +32,6 @@ export const removeAccents = (text: string): string => {
 const containsKeyword = (text: string, keyword: string): boolean => {
   if (!keyword || keyword.length < 2) return false;
   
-  // Para palavras curtas, exige que sejam palavras isoladas (regex \b não funciona bem com acentos, usamos limites manuais)
   if (keyword.length <= 3) {
     const regex = new RegExp(`(^|[^a-z0-9])${keyword}([^a-z0-9]|$)`, 'i');
     return regex.test(text);
@@ -42,6 +44,8 @@ const containsKeyword = (text: string, keyword: string): boolean => {
  * Extrai texto de um PDF de forma robusta.
  */
 export const extractTextFromPDF = async (file: File): Promise<string> => {
+  setupPdfWorker(); // Garante que o worker está pronto apenas na hora do uso
+  
   try {
     const arrayBuffer = await file.arrayBuffer();
     const loadingTask = pdfjsLib.getDocument({
@@ -85,7 +89,6 @@ export const identifyCategory = (
   if (!textNormalized || !keywordMap) return null;
   const scores: Record<string, number> = {};
 
-  // 1. Calcular pontuação para cada categoria
   for (const [category, keywords] of Object.entries(keywordMap)) {
     if (!keywords || !Array.isArray(keywords)) continue;
     
@@ -101,7 +104,6 @@ export const identifyCategory = (
     }
 
     if (categoryScore > 0) {
-      // 2. Aplicar bônus se for PRIORIDADE
       if (priorityCategories && priorityCategories.includes(category)) {
         categoryScore += 1000;
       }
@@ -126,7 +128,6 @@ export const identifyCompany = (textNormalized: string, companies: Company[] = [
 
   const textOnlyNumbers = textNormalized.replace(/\D/g, '');
 
-  // 1. Prioridade Total: Match Numérico
   for (const company of companies) {
     const companyDocClean = (company.docNumber || '').replace(/\D/g, '');
     if (companyDocClean.length < 5) continue;
@@ -137,7 +138,6 @@ export const identifyCompany = (textNormalized: string, companies: Company[] = [
     }
   }
 
-  // 2. Match por Nome
   const commonTerms = ['ltda', 's.a', 'me', 'epp', 'eireli', 'limitada', 'sa', 'cnpj', 'cpf'];
   let bestMatch: Company | null = null;
   let maxNameScore = 0;
