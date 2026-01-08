@@ -27,9 +27,11 @@ const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
-// --- HELPER: Puppeteer Lock Cleaner ---
+// --- HELPER: Puppeteer Lock Cleaner (CORREÇÃO DE ERRO CODE 21) ---
 const cleanPuppeteerLocks = (dir) => {
+    // Lista de arquivos de trava que o Chrome cria
     const locks = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+    
     if (fs.existsSync(dir)) {
         locks.forEach(lock => {
             const lockPath = path.join(dir, lock);
@@ -42,7 +44,8 @@ const cleanPuppeteerLocks = (dir) => {
                 }
             }
         });
-        // Check inside Default folder too if it exists
+        
+        // Verifica também dentro da pasta 'Default' (estrutura comum do Chrome)
         const defaultDir = path.join(dir, 'Default');
         if (fs.existsSync(defaultDir)) {
              locks.forEach(lock => {
@@ -121,7 +124,8 @@ const getWaClientWrapper = (username) => {
         const authPath = path.join(DATA_DIR, `whatsapp_auth_${username}`);
         if (!fs.existsSync(authPath)) fs.mkdirSync(authPath, { recursive: true });
 
-        // --- FIX: Clean Puppeteer Locks before starting ---
+        // --- FIX: Limpar travas antes de iniciar o Puppeteer ---
+        // LocalAuth cria uma pasta session-{clientId} dentro do authPath
         const sessionPath = path.join(authPath, `session-${username}`);
         cleanPuppeteerLocks(sessionPath);
 
@@ -132,7 +136,16 @@ const getWaClientWrapper = (username) => {
             puppeteer: {
                 headless: true,
                 executablePath: puppeteerExecutablePath,
-                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--disable-gpu'],
+                // Argumentos críticos para rodar em Docker/Easypanel sem crashar
+                args: [
+                    '--no-sandbox', 
+                    '--disable-setuid-sandbox', 
+                    '--disable-dev-shm-usage', 
+                    '--disable-accelerated-2d-canvas', 
+                    '--no-first-run', 
+                    '--no-zygote', 
+                    '--disable-gpu'
+                ],
             }
         });
 
@@ -304,10 +317,11 @@ const storage = multer.diskStorage({
 })
 const upload = multer({ storage: storage });
 
-// --- CONFIGURAÇÃO EMAIL (HOSTINGER) ---
+// --- CONFIGURAÇÃO EMAIL (HOSTINGER / GMAIL) ---
+// Usa variáveis de ambiente para Hostinger, com fallback para Gmail
 const emailPort = parseInt(process.env.EMAIL_PORT || '465');
 const emailTransporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST,
+    host: process.env.EMAIL_HOST || 'smtp.gmail.com', // Flexível para Hostinger
     port: emailPort,
     secure: emailPort === 465, // true para 465, false para outras
     auth: {
