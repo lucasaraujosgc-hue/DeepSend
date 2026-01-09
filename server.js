@@ -599,8 +599,13 @@ app.post('/api/send-documents', async (req, res) => {
                     const ccEmails = emailList.slice(1).join(', ');
 
                     if (mainEmail) {
+                        // CONFIGURAÇÃO DO REMETENTE (ALIAS)
+                        const senderName = process.env.EMAIL_FROM_NAME || 'Contabilidade';
+                        const senderEmail = process.env.EMAIL_FROM_EMAIL || process.env.EMAIL_USER;
+                        const fromAddress = `"${senderName}" <${senderEmail}>`;
+
                         await emailTransporter.sendMail({
-                            from: process.env.EMAIL_USER,
+                            from: fromAddress,
                             to: mainEmail,
                             cc: ccEmails, // Envia os demais como cópia
                             subject: finalSubject,
@@ -753,8 +758,13 @@ setInterval(() => {
                              const ccEmails = emailList.slice(1).join(', ');
 
                              if (mainEmail) {
+                                // CONFIGURAÇÃO DO REMETENTE (ALIAS)
+                                const senderName = process.env.EMAIL_FROM_NAME || 'Contabilidade';
+                                const senderEmail = process.env.EMAIL_FROM_EMAIL || process.env.EMAIL_USER;
+                                const fromAddress = `"${senderName}" <${senderEmail}>`;
+
                                 await emailTransporter.sendMail({
-                                    from: process.env.EMAIL_USER,
+                                    from: fromAddress,
                                     to: mainEmail,
                                     cc: ccEmails,
                                     subject: msg.title,
