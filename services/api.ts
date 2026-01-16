@@ -38,7 +38,7 @@ const handleResponse = async (res: Response) => {
 };
 
 export const api = {
-  // Authentication
+  // Authenticationo
   login: async (user: string, pass: string): Promise<{ success: boolean; token?: string }> => {
     try {
       const res = await fetch(`${API_URL}/login`, {
