@@ -76,26 +76,39 @@ const getDb = (username) => {
     // Initialize tables for this specific user
     db.serialize(() => {
         db.run(`CREATE TABLE IF NOT EXISTS companies (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, docNumber TEXT, type TEXT, email TEXT, whatsapp TEXT)`);
-        db.run(`CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, description TEXT, status TEXT, priority TEXT, color TEXT, dueDate TEXT, companyId INTEGER, recurrence TEXT, dayOfWeek TEXT, recurrenceDate TEXT, targetCompanyType TEXT)`);
+        
+        // Updated tasks table with createdAt
+        db.run(`CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, description TEXT, status TEXT, priority TEXT, color TEXT, dueDate TEXT, companyId INTEGER, recurrence TEXT, dayOfWeek TEXT, recurrenceDate TEXT, targetCompanyType TEXT, createdAt TEXT)`);
+        
         db.run(`CREATE TABLE IF NOT EXISTS document_status (id INTEGER PRIMARY KEY AUTOINCREMENT, companyId INTEGER, category TEXT, competence TEXT, status TEXT, UNIQUE(companyId, category, competence))`);
         db.run(`CREATE TABLE IF NOT EXISTS sent_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, companyName TEXT, docName TEXT, category TEXT, sentAt TEXT, channels TEXT, status TEXT)`);
         db.run(`CREATE TABLE IF NOT EXISTS user_settings (id INTEGER PRIMARY KEY CHECK (id = 1), settings TEXT)`);
         db.run(`CREATE TABLE IF NOT EXISTS scheduled_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, message TEXT, nextRun TEXT, recurrence TEXT, active INTEGER, type TEXT, channels TEXT, targetType TEXT, selectedCompanyIds TEXT, attachmentFilename TEXT, attachmentOriginalName TEXT, documentsPayload TEXT, createdBy TEXT)`);
         
         // --- MIGRATION CHECK ---
-        // Verifica se a coluna documentsPayload existe, se não, adiciona.
+        
+        // Migration for scheduled_messages.documentsPayload
         db.all("PRAGMA table_info(scheduled_messages)", [], (err, rows) => {
-            if (err) {
-                console.error("Erro ao verificar schema da tabela scheduled_messages:", err);
-                return;
-            }
             if (rows && rows.length > 0) {
                 const hasColumn = rows.some(col => col.name === 'documentsPayload');
                 if (!hasColumn) {
-                    console.log(`[Migration ${username}] Adicionando coluna documentsPayload...`);
-                    db.run("ALTER TABLE scheduled_messages ADD COLUMN documentsPayload TEXT", (alterErr) => {
-                        if (alterErr) console.error(`[Migration ${username}] Erro ao adicionar coluna:`, alterErr);
-                        else console.log(`[Migration ${username}] Coluna documentsPayload adicionada com sucesso.`);
+                    db.run("ALTER TABLE scheduled_messages ADD COLUMN documentsPayload TEXT", (e) => { if(e) console.error("Migration documentsPayload failed", e); });
+                }
+            }
+        });
+
+        // Migration for tasks.createdAt
+        db.all("PRAGMA table_info(tasks)", [], (err, rows) => {
+            if (rows && rows.length > 0) {
+                const hasColumn = rows.some(col => col.name === 'createdAt');
+                if (!hasColumn) {
+                    const today = new Date().toISOString().split('T')[0];
+                    db.run("ALTER TABLE tasks ADD COLUMN createdAt TEXT", (e) => { 
+                        if(e) console.error("Migration tasks.createdAt failed", e); 
+                        else {
+                            // Backfill existing tasks
+                            db.run("UPDATE tasks SET createdAt = ?", [today]);
+                        }
                     });
                 }
             }
@@ -457,13 +470,18 @@ app.get('/api/tasks', (req, res) => {
 app.post('/api/tasks', (req, res) => {
     const t = req.body;
     const db = getDb(req.user);
+    const today = new Date().toISOString().split('T')[0];
+    const createdAt = t.createdAt || today;
+
     if (t.id && t.id < 1000000000000) {
-        db.run(`UPDATE tasks SET title=?, description=?, status=?, priority=?, color=?, dueDate=?, companyId=?, recurrence=?, dayOfWeek=?, recurrenceDate=?, targetCompanyType=? WHERE id=?`, 
-        [t.title, t.description, t.status, t.priority, t.color, t.dueDate, t.companyId, t.recurrence, t.dayOfWeek, t.recurrenceDate, t.targetCompanyType, t.id], 
+        // Update
+        db.run(`UPDATE tasks SET title=?, description=?, status=?, priority=?, color=?, dueDate=?, companyId=?, recurrence=?, dayOfWeek=?, recurrenceDate=?, targetCompanyType=?, createdAt=? WHERE id=?`, 
+        [t.title, t.description, t.status, t.priority, t.color, t.dueDate, t.companyId, t.recurrence, t.dayOfWeek, t.recurrenceDate, t.targetCompanyType, createdAt, t.id], 
         function(err) { res.json({ success: !err, id: t.id }); });
     } else {
-        db.run(`INSERT INTO tasks (title, description, status, priority, color, dueDate, companyId, recurrence, dayOfWeek, recurrenceDate, targetCompanyType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, 
-        [t.title, t.description, t.status, t.priority, t.color, t.dueDate, t.companyId, t.recurrence, t.dayOfWeek, t.recurrenceDate, t.targetCompanyType], 
+        // Insert
+        db.run(`INSERT INTO tasks (title, description, status, priority, color, dueDate, companyId, recurrence, dayOfWeek, recurrenceDate, targetCompanyType, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, 
+        [t.title, t.description, t.status, t.priority, t.color, t.dueDate, t.companyId, t.recurrence, t.dayOfWeek, t.recurrenceDate, t.targetCompanyType, createdAt], 
         function(err) { res.json({ success: !err, id: this.lastID }); });
     }
 });

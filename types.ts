@@ -28,6 +28,7 @@ export interface Task {
   priority: TaskPriority;
   color: string;
   dueDate?: string;
+  createdAt?: string; // Data de criação (YYYY-MM-DD)
   companyId?: number;
   // Recurrence fields
   recurrence?: 'nenhuma' | 'diaria' | 'semanal' | 'mensal' | 'trimestral' | 'semestral' | 'anual';

@@ -123,7 +123,7 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
 
         if (result.success) {
             // Fix: Cast from any to number[] for successIds
-            const successIds = (result.sentIds || []) as any as number[];
+            const successIds: number[] = (result.sentIds as unknown as number[]) || [];
             
             if (successIds.length > 0) {
                 onSendDocuments(successIds);
