@@ -63,6 +63,36 @@ const cleanPuppeteerLocks = (dir) => {
     }
 };
 
+// --- HELPER: Robust WhatsApp Send ---
+// Tenta garantir que o chat existe e está carregado antes de enviar para evitar erro 'markedUnread'
+const safeSendMessage = async (client, chatId, content, options = {}) => {
+    try {
+        // 1. Verifica se o número é registrado (opcional, mas evita erros de user not found)
+        const isRegistered = await client.isRegisteredUser(chatId);
+        if (!isRegistered) {
+            console.warn(`[WhatsApp] Número não registrado: ${chatId}`);
+            return null;
+        }
+
+        // 2. Busca o objeto Chat explicitamente. Isso "hidrata" a store do WWebJS.
+        const chat = await client.getChatById(chatId);
+        
+        // 3. Envia usando o objeto Chat, que é mais estável que client.sendMessage direto
+        return await chat.sendMessage(content, options);
+
+    } catch (error) {
+        console.error(`[WhatsApp] Erro ao enviar para ${chatId}:`, error.message);
+        
+        // Fallback: Tenta enviar direto pelo cliente se o getChat falhou
+        try {
+            return await client.sendMessage(chatId, content, options);
+        } catch (fallbackError) {
+            console.error(`[WhatsApp] Falha total no envio para ${chatId}:`, fallbackError.message);
+            throw fallbackError;
+        }
+    }
+};
+
 // --- MULTI-TENANCY: Database Management ---
 const dbInstances = {};
 
@@ -289,7 +319,10 @@ const sendDailySummaryToUser = async (user) => {
                     let number = settings.dailySummaryNumber.replace(/\D/g, '');
                     if (!number.startsWith('55')) number = '55' + number;
                     const chatId = `${number}@c.us`;
-                    await waWrapper.client.sendMessage(chatId, message);
+                    
+                    // --- USANDO O HELPER SEGURO ---
+                    await safeSendMessage(waWrapper.client, chatId, message);
+                    
                     console.log(`[Summary ${user}] Resumo diário enviado com sucesso para ${number}.`);
                     resolve({ success: true, message: 'Enviado com sucesso' });
                 } catch (sendErr) {
@@ -647,16 +680,17 @@ app.post('/api/send-documents', async (req, res) => {
                     const whatsappSignature = whatsappTemplate || "_Esses arquivos também foram enviados por e-mail_\n\nAtenciosamente,\nContabilidade";
                     const mensagemCompleta = `*📄 Olá!* \n\n${messageBody}\n\n*Arquivos enviados:*\n${listaArquivos}\n\n${whatsappSignature}`;
 
-                    await client.sendMessage(chatId, mensagemCompleta);
+                    // --- USANDO O HELPER SEGURO ---
+                    await safeSendMessage(client, chatId, mensagemCompleta);
                     
                     for (const att of validAttachments) {
-                        // FIX: Uso de Base64 para envio mais robusto em Docker/Puppeteer
-                        // MessageMedia.fromFilePath pode falhar dependendo do path ou permissões no container
                         try {
                             const fileData = fs.readFileSync(att.path).toString('base64');
                             const media = new MessageMedia(att.contentType, fileData, att.filename);
-                            await client.sendMessage(chatId, media);
-                            // Aumentado delay para evitar rate limit
+                            
+                            // --- USANDO O HELPER SEGURO PARA MEDIA ---
+                            await safeSendMessage(client, chatId, media);
+                            
                             await new Promise(r => setTimeout(r, 3000));
                         } catch (mediaErr) {
                             console.error(`Erro ao enviar midia ${att.filename}`, mediaErr);
@@ -826,14 +860,18 @@ setInterval(() => {
                             // Adiciona assinatura
                             waBody += `\n\n${settings?.whatsappTemplate || ''}`;
 
-                            await waWrapper.client.sendMessage(chatId, waBody);
+                            // --- USANDO O HELPER SEGURO ---
+                            await safeSendMessage(waWrapper.client, chatId, waBody);
                             
                             for (const att of attachmentsToSend) {
                                 // FIX: Uso de Base64 no Cron também
                                 try {
                                     const fileData = fs.readFileSync(att.path).toString('base64');
                                     const media = new MessageMedia(att.contentType, fileData, att.filename);
-                                    await waWrapper.client.sendMessage(chatId, media);
+                                    
+                                    // --- USANDO O HELPER SEGURO PARA MEDIA ---
+                                    await safeSendMessage(waWrapper.client, chatId, media);
+                                    
                                     await new Promise(r => setTimeout(r, 3000));
                                 } catch (err) {
                                     console.error(`[CRON] Erro media zap ${att.filename}`, err);
