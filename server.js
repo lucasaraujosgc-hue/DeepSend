@@ -648,11 +648,20 @@ app.post('/api/send-documents', async (req, res) => {
                     const mensagemCompleta = `*📄 Olá!* \n\n${messageBody}\n\n*Arquivos enviados:*\n${listaArquivos}\n\n${whatsappSignature}`;
 
                     await client.sendMessage(chatId, mensagemCompleta);
+                    
                     for (const att of validAttachments) {
-                        const media = MessageMedia.fromFilePath(att.path);
-                        media.filename = att.filename;
-                        await client.sendMessage(chatId, media);
-                        await new Promise(r => setTimeout(r, 1000));
+                        // FIX: Uso de Base64 para envio mais robusto em Docker/Puppeteer
+                        // MessageMedia.fromFilePath pode falhar dependendo do path ou permissões no container
+                        try {
+                            const fileData = fs.readFileSync(att.path).toString('base64');
+                            const media = new MessageMedia(att.contentType, fileData, att.filename);
+                            await client.sendMessage(chatId, media);
+                            // Aumentado delay para evitar rate limit
+                            await new Promise(r => setTimeout(r, 3000));
+                        } catch (mediaErr) {
+                            console.error(`Erro ao enviar midia ${att.filename}`, mediaErr);
+                            errors.push(`Erro mídia WhatsApp (${att.filename}): ${mediaErr.message}`);
+                        }
                     }
                 } catch (e) { errors.push(`Erro Zap ${company.name}: ${e.message}`); }
             }
@@ -820,10 +829,15 @@ setInterval(() => {
                             await waWrapper.client.sendMessage(chatId, waBody);
                             
                             for (const att of attachmentsToSend) {
-                                const media = MessageMedia.fromFilePath(att.path);
-                                media.filename = att.filename;
-                                await waWrapper.client.sendMessage(chatId, media);
-                                await new Promise(r => setTimeout(r, 1000)); // Throttle
+                                // FIX: Uso de Base64 no Cron também
+                                try {
+                                    const fileData = fs.readFileSync(att.path).toString('base64');
+                                    const media = new MessageMedia(att.contentType, fileData, att.filename);
+                                    await waWrapper.client.sendMessage(chatId, media);
+                                    await new Promise(r => setTimeout(r, 3000));
+                                } catch (err) {
+                                    console.error(`[CRON] Erro media zap ${att.filename}`, err);
+                                }
                             }
                         } catch(e) { console.error(`[CRON] Erro zap ${company.name}`, e); }
                     }
@@ -855,39 +869,6 @@ setInterval(() => {
                     const nextRunStr = nextDate.toISOString().slice(0, 16);
                     db.run("UPDATE scheduled_messages SET nextRun = ? WHERE id = ?", [nextRunStr, msg.id]);
                 }
-            }
-        });
-    });
-}, 60000); // Check every minute
-
-// --- CRON JOB: DAILY TASK SUMMARY ---
-setInterval(() => {
-    const envUsers = (process.env.USERS || '').split(',');
-    envUsers.forEach(user => {
-        const db = getDb(user);
-        if (!db) return;
-
-        const now = new Date();
-        const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-        const brazilTime = new Date(utc - (3600000 * 3));
-        
-        // Verifica se é Segunda a Sexta (1=Seg, 5=Sex)
-        const dayOfWeek = brazilTime.getDay();
-        if (dayOfWeek < 1 || dayOfWeek > 5) return;
-
-        const currentHHMM = brazilTime.toISOString().slice(11, 16); // "HH:mm"
-
-        db.get("SELECT settings FROM user_settings WHERE id = 1", (e, r) => {
-            if (e || !r) return;
-            const settings = JSON.parse(r.settings);
-            
-            // Verifica se está configurado e se é o horário exato
-            if (!settings.dailySummaryNumber || !settings.dailySummaryTime) return;
-            
-            // Simples verificação de horário (Executa apenas no minuto exato)
-            if (settings.dailySummaryTime === currentHHMM) {
-                console.log(`[CRON ${user}] Iniciando resumo diário de tarefas para ${settings.dailySummaryNumber}`);
-                sendDailySummaryToUser(user);
             }
         });
     });

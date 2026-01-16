@@ -10,6 +10,10 @@ const Companies: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   
+  // Filter States
+  const [searchTerm, setSearchTerm] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -156,6 +160,19 @@ const Companies: React.FC = () => {
     reader.readAsBinaryString(file);
   };
 
+  // Filter Logic
+  const filteredCompanies = companies.filter(company => {
+      const searchLower = searchTerm.toLowerCase();
+      const matchesSearch = 
+        company.name.toLowerCase().includes(searchLower) ||
+        company.docNumber.includes(searchLower) ||
+        (company.email && company.email.toLowerCase().includes(searchLower));
+      
+      const matchesType = typeFilter ? company.type === typeFilter : true;
+
+      return matchesSearch && matchesType;
+  });
+
   if (loading) {
       return <div className="flex justify-center items-center h-64"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
   }
@@ -201,9 +218,15 @@ const Companies: React.FC = () => {
               type="text" 
               placeholder="Buscar por nome, CNPJ ou email..." 
               className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
-          <select className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+          <select 
+            className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+          >
             <option value="">Todos os Tipos</option>
             <option value="CNPJ">CNPJ</option>
             <option value="MEI">MEI</option>
@@ -224,7 +247,7 @@ const Companies: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {companies.map((company) => (
+              {filteredCompanies.map((company) => (
                 <tr key={company.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4">
                      <button 
@@ -271,6 +294,13 @@ const Companies: React.FC = () => {
                   </td>
                 </tr>
               ))}
+              {filteredCompanies.length === 0 && (
+                  <tr>
+                      <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
+                          Nenhuma empresa encontrada com os filtros atuais.
+                      </td>
+                  </tr>
+              )}
             </tbody>
           </table>
         </div>
