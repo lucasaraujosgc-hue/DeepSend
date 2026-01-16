@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, Plus, Building2, User, Copy, Check, X, Upload, Pencil, Trash, Loader2 } from 'lucide-react';
 import { Company } from '../types';
@@ -163,11 +162,12 @@ const Companies: React.FC = () => {
   // Filter Logic
   const filteredCompanies = companies.filter(company => {
       const searchLower = searchTerm.toLowerCase();
-      const matchesSearch = 
-        company.name.toLowerCase().includes(searchLower) ||
-        company.docNumber.includes(searchLower) ||
-        (company.email && company.email.toLowerCase().includes(searchLower));
+      // Safety checks for undefined values
+      const nameMatch = (company.name || '').toLowerCase().includes(searchLower);
+      const docMatch = (company.docNumber || '').includes(searchLower);
+      const emailMatch = (company.email || '').toLowerCase().includes(searchLower);
       
+      const matchesSearch = nameMatch || docMatch || emailMatch;
       const matchesType = typeFilter ? company.type === typeFilter : true;
 
       return matchesSearch && matchesType;
