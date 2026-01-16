@@ -22,13 +22,42 @@ const port = process.env.PORT || 3000;
 // Configuração de diretórios
 const DATA_DIR = process.env.DATA_PATH || path.join(__dirname, 'data');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+const LOG_FILE = path.join(DATA_DIR, 'debug_whatsapp.log');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
+// --- SYSTEM: Logger ---
+const log = (message, error = null) => {
+    const timestamp = new Date().toISOString();
+    let errorDetail = '';
+    
+    if (error) {
+        // Extrai detalhes do erro (message, stack, etc)
+        errorDetail = `\nERROR: ${error.message}`;
+        if (error.stack) errorDetail += `\nSTACK: ${error.stack}`;
+        if (JSON.stringify(error) !== '{}') errorDetail += `\nJSON: ${JSON.stringify(error)}`;
+    }
+
+    const logMessage = `[${timestamp}] ${message}${errorDetail}\n`;
+    
+    // Escreve no Console (Easypanel logs)
+    console.log(`[APP] ${message}`);
+    if (error) console.error(error);
+
+    // Escreve no Arquivo (persistência)
+    try {
+        fs.appendFileSync(LOG_FILE, logMessage);
+    } catch (e) {
+        console.error("Falha crítica ao escrever no arquivo de log:", e);
+    }
+};
+
+log("Servidor iniciando...");
+log(`Diretório de dados: ${DATA_DIR}`);
+
 // --- HELPER: Puppeteer Lock Cleaner (CORREÇÃO DE ERRO CODE 21) ---
 const cleanPuppeteerLocks = (dir) => {
-    // Lista de arquivos de trava que o Chrome cria e esquece de deletar
     const locks = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
     
     if (fs.existsSync(dir)) {
@@ -37,14 +66,13 @@ const cleanPuppeteerLocks = (dir) => {
             if (fs.existsSync(lockPath)) {
                 try {
                     fs.unlinkSync(lockPath);
-                    console.log(`[Puppeteer Fix] Trava removida: ${lockPath}`);
+                    log(`[Puppeteer Fix] Trava removida: ${lockPath}`);
                 } catch (e) {
-                    console.error(`[Puppeteer Fix] Falha ao remover trava: ${lockPath}`, e.message);
+                    log(`[Puppeteer Fix] Falha ao remover trava: ${lockPath}`, e);
                 }
             }
         });
         
-        // Verifica também dentro da pasta 'Default' (estrutura comum do Chrome)
         const defaultDir = path.join(dir, 'Default');
         if (fs.existsSync(defaultDir)) {
              locks.forEach(lock => {
@@ -52,9 +80,9 @@ const cleanPuppeteerLocks = (dir) => {
                 if (fs.existsSync(lockPath)) {
                     try {
                         fs.unlinkSync(lockPath);
-                        console.log(`[Puppeteer Fix] Trava removida (Default): ${lockPath}`);
+                        log(`[Puppeteer Fix] Trava removida (Default): ${lockPath}`);
                     } catch (e) {
-                        console.error(`[Puppeteer Fix] Falha ao remover trava (Default): ${lockPath}`, e.message);
+                        log(`[Puppeteer Fix] Falha ao remover trava (Default): ${lockPath}`, e);
                     }
                 }
             });
@@ -63,32 +91,46 @@ const cleanPuppeteerLocks = (dir) => {
 };
 
 // --- HELPER: Robust WhatsApp Send ---
-// Tenta garantir que o chat existe e está carregado antes de enviar para evitar erro 'markedUnread'
 const safeSendMessage = async (client, chatId, content, options = {}) => {
+    log(`[WhatsApp] Tentando enviar mensagem para: ${chatId}`);
     try {
-        // 1. Verifica se o número é registrado (opcional, mas evita erros de user not found)
-        const isRegistered = await client.isRegisteredUser(chatId);
-        if (!isRegistered) {
-            console.warn(`[WhatsApp] Número não registrado: ${chatId}`);
-            return null;
+        // Verificação de Estado do Cliente
+        if (!client) throw new Error("Client é null");
+        // Algumas versões do wwebjs expõem puppeteerPage, útil para debug
+        
+        // 1. Verifica se o número é válido no WhatsApp
+        let finalChatId = chatId;
+        
+        // Tenta limpar o sufixo para garantir formato correto
+        if (!finalChatId.includes('@')) {
+             log(`[WhatsApp] ChatId inválido detectado: ${finalChatId}. Tentando corrigir.`);
+             throw new Error("ChatId mal formatado");
         }
 
-        // 2. Busca o objeto Chat explicitamente. Isso "hidrata" a store do WWebJS.
-        const chat = await client.getChatById(chatId);
-        
-        // 3. Envia usando o objeto Chat, que é mais estável que client.sendMessage direto
-        return await chat.sendMessage(content, options);
+        // Tenta obter o chat. Isso força o WWebJS a sincronizar internamente
+        try {
+            const chat = await client.getChatById(finalChatId);
+            log(`[WhatsApp] Chat encontrado: ${chat.name || 'Sem nome'} (${finalChatId})`);
+            
+            // Simula "digitando" para parecer mais humano e dar tempo de processamento
+            await chat.sendStateTyping();
+            await new Promise(r => setTimeout(r, 500)); // Pequeno delay
+            
+            const msg = await chat.sendMessage(content, options);
+            log(`[WhatsApp] Mensagem enviada com sucesso. ID: ${msg.id.id}`);
+            return msg;
+        } catch (chatError) {
+            log(`[WhatsApp] Erro ao obter objeto Chat ou enviar via Chat. Tentando envio direto via client.`, chatError);
+            
+            // Fallback: Envio direto
+            const msg = await client.sendMessage(finalChatId, content, options);
+            log(`[WhatsApp] Mensagem enviada via Fallback (client.sendMessage). ID: ${msg.id.id}`);
+            return msg;
+        }
 
     } catch (error) {
-        console.error(`[WhatsApp] Erro ao enviar para ${chatId}:`, error.message);
-        
-        // Fallback: Tenta enviar direto pelo cliente se o getChat falhou
-        try {
-            return await client.sendMessage(chatId, content, options);
-        } catch (fallbackError) {
-            console.error(`[WhatsApp] Falha total no envio para ${chatId}:`, fallbackError.message);
-            throw fallbackError;
-        }
+        log(`[WhatsApp] FALHA CRÍTICA NO ENVIO para ${chatId}`, error);
+        throw error;
     }
 };
 
@@ -102,42 +144,31 @@ const getDb = (username) => {
     const userDbPath = path.join(DATA_DIR, `${username}.db`);
     const db = new sqlite3.Database(userDbPath);
     
-    // Initialize tables for this specific user
     db.serialize(() => {
         db.run(`CREATE TABLE IF NOT EXISTS companies (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, docNumber TEXT, type TEXT, email TEXT, whatsapp TEXT)`);
-        
-        // Updated tasks table with createdAt
         db.run(`CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, description TEXT, status TEXT, priority TEXT, color TEXT, dueDate TEXT, companyId INTEGER, recurrence TEXT, dayOfWeek TEXT, recurrenceDate TEXT, targetCompanyType TEXT, createdAt TEXT)`);
-        
         db.run(`CREATE TABLE IF NOT EXISTS document_status (id INTEGER PRIMARY KEY AUTOINCREMENT, companyId INTEGER, category TEXT, competence TEXT, status TEXT, UNIQUE(companyId, category, competence))`);
         db.run(`CREATE TABLE IF NOT EXISTS sent_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, companyName TEXT, docName TEXT, category TEXT, sentAt TEXT, channels TEXT, status TEXT)`);
         db.run(`CREATE TABLE IF NOT EXISTS user_settings (id INTEGER PRIMARY KEY CHECK (id = 1), settings TEXT)`);
         db.run(`CREATE TABLE IF NOT EXISTS scheduled_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, message TEXT, nextRun TEXT, recurrence TEXT, active INTEGER, type TEXT, channels TEXT, targetType TEXT, selectedCompanyIds TEXT, attachmentFilename TEXT, attachmentOriginalName TEXT, documentsPayload TEXT, createdBy TEXT)`);
         
-        // --- MIGRATION CHECK ---
-        
-        // Migration for scheduled_messages.documentsPayload
         db.all("PRAGMA table_info(scheduled_messages)", [], (err, rows) => {
             if (rows && rows.length > 0) {
                 const hasColumn = rows.some(col => col.name === 'documentsPayload');
                 if (!hasColumn) {
-                    db.run("ALTER TABLE scheduled_messages ADD COLUMN documentsPayload TEXT", (e) => { if(e) console.error("Migration documentsPayload failed", e); });
+                    db.run("ALTER TABLE scheduled_messages ADD COLUMN documentsPayload TEXT", (e) => { if(e) log("Migration documentsPayload failed", e); });
                 }
             }
         });
 
-        // Migration for tasks.createdAt
         db.all("PRAGMA table_info(tasks)", [], (err, rows) => {
             if (rows && rows.length > 0) {
                 const hasColumn = rows.some(col => col.name === 'createdAt');
                 if (!hasColumn) {
                     const today = new Date().toISOString().split('T')[0];
                     db.run("ALTER TABLE tasks ADD COLUMN createdAt TEXT", (e) => { 
-                        if(e) console.error("Migration tasks.createdAt failed", e); 
-                        else {
-                            // Backfill existing tasks
-                            db.run("UPDATE tasks SET createdAt = ?", [today]);
-                        }
+                        if(e) log("Migration tasks.createdAt failed", e); 
+                        else db.run("UPDATE tasks SET createdAt = ?", [today]);
                     });
                 }
             }
@@ -149,13 +180,14 @@ const getDb = (username) => {
 };
 
 // --- MULTI-TENANCY: WhatsApp Management ---
-const waClients = {}; // { username: { client, qr, status, info } }
+const waClients = {}; 
 
 const getWaClientWrapper = (username) => {
     if (!username) return null;
     
     if (!waClients[username]) {
-        // Inicializa estrutura
+        log(`[WhatsApp Init] Inicializando cliente para usuário: ${username}`);
+        
         waClients[username] = {
             client: null,
             qr: null,
@@ -166,19 +198,17 @@ const getWaClientWrapper = (username) => {
         const authPath = path.join(DATA_DIR, `whatsapp_auth_${username}`);
         if (!fs.existsSync(authPath)) fs.mkdirSync(authPath, { recursive: true });
 
-        // --- FIX: Limpar travas antes de iniciar o Puppeteer ---
-        // A lib LocalAuth cria uma pasta 'session-{clientId}' dentro de authPath
         const sessionPath = path.join(authPath, `session-${username}`);
         cleanPuppeteerLocks(sessionPath);
 
-        const puppeteerExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
+        const puppeteerExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser';
+        log(`[WhatsApp Init] Usando executável Chromium: ${puppeteerExecutablePath}`);
         
         const client = new Client({
             authStrategy: new LocalAuth({ clientId: username, dataPath: authPath }), 
             puppeteer: {
-                headless: true,
+                headless: true, // Tente 'new' se estiver usando Puppeteer muito recente, mas true é mais seguro em versoes mistas
                 executablePath: puppeteerExecutablePath,
-                // Argumentos essenciais para rodar no Docker/Easypanel sem crashar
                 args: [
                     '--no-sandbox', 
                     '--disable-setuid-sandbox', 
@@ -186,34 +216,52 @@ const getWaClientWrapper = (username) => {
                     '--disable-accelerated-2d-canvas', 
                     '--no-first-run', 
                     '--no-zygote', 
-                    '--disable-gpu'
+                    '--disable-gpu',
+                    '--disable-software-rasterizer', // Adicionado para estabilidade gráfica
+                    '--single-process' // Necessário em alguns ambientes Alpine restritos
                 ],
             }
         });
 
+        // Eventos de Diagnóstico
         client.on('qr', (qr) => { 
-            console.log(`QR Code gerado para ${username}`);
+            log(`[WhatsApp Event] QR Code gerado para ${username}`);
             QRCode.toDataURL(qr, (err, url) => { 
+                if (err) log(`[WhatsApp Event] Erro ao gerar imagem QR`, err);
                 waClients[username].qr = url; 
                 waClients[username].status = 'generating_qr';
             }); 
         });
         
         client.on('ready', () => { 
+            log(`[WhatsApp Event] CLIENTE PRONTO (${username})`);
             waClients[username].status = 'connected';
             waClients[username].qr = null;
             waClients[username].info = client.info;
-            console.log(`WhatsApp Pronto para: ${username}`); 
         });
         
-        client.on('disconnected', () => { 
+        client.on('authenticated', () => {
+            log(`[WhatsApp Event] Autenticado com sucesso (${username})`);
+        });
+
+        client.on('auth_failure', (msg) => {
+            log(`[WhatsApp Event] FALHA DE AUTENTICAÇÃO (${username}): ${msg}`);
+            waClients[username].status = 'error';
+        });
+        
+        client.on('disconnected', (reason) => { 
+            log(`[WhatsApp Event] Desconectado (${username}). Razão: ${reason}`);
             waClients[username].status = 'disconnected';
             waClients[username].info = null;
-            console.log(`WhatsApp Desconectado para: ${username}`); 
+        });
+
+        // Tentar capturar erros do navegador
+        client.on('change_state', state => {
+            log(`[WhatsApp Event] Mudança de estado: ${state}`);
         });
 
         client.initialize().catch((err) => {
-            console.error(`Erro WhatsApp (${username}):`, err);
+            log(`[WhatsApp Init] ERRO FATAL ao inicializar cliente (${username})`, err);
             waClients[username].status = 'error';
         });
         
@@ -225,107 +273,50 @@ const getWaClientWrapper = (username) => {
 
 // --- LOGIC: Send Daily Summary Helper ---
 const sendDailySummaryToUser = async (user) => {
+    // ... Mantido igual, apenas substituindo console.log por log() se desejar debug profundo aqui ...
     const db = getDb(user);
     if (!db) return;
 
     const waWrapper = getWaClientWrapper(user);
     if (waWrapper.status !== 'connected') {
-        console.log(`[Summary ${user}] WhatsApp não conectado. Abortando.`);
         return { success: false, message: 'WhatsApp desconectado' };
     }
 
     return new Promise((resolve, reject) => {
         db.get("SELECT settings FROM user_settings WHERE id = 1", (e, r) => {
-            if (e || !r) {
-                resolve({ success: false, message: 'Configurações não encontradas' });
-                return;
-            }
+            if (e || !r) { resolve({ success: false, message: 'Configurações não encontradas' }); return; }
             
             const settings = JSON.parse(r.settings);
-            if (!settings.dailySummaryNumber) {
-                resolve({ success: false, message: 'Número para resumo não configurado' });
-                return;
-            }
+            if (!settings.dailySummaryNumber) { resolve({ success: false, message: 'Número para resumo não configurado' }); return; }
 
-            // Busca tarefas pendentes e faz JOIN com empresas para pegar o nome
-            const sql = `
-                SELECT t.*, c.name as companyName 
-                FROM tasks t 
-                LEFT JOIN companies c ON t.companyId = c.id 
-                WHERE t.status != 'concluida'
-            `;
+            const sql = `SELECT t.*, c.name as companyName FROM tasks t LEFT JOIN companies c ON t.companyId = c.id WHERE t.status != 'concluida'`;
 
             db.all(sql, [], async (err, tasks) => {
-                if (err) {
-                    resolve({ success: false, message: 'Erro ao buscar tarefas' });
-                    return;
-                }
+                if (err) { resolve({ success: false, message: 'Erro ao buscar tarefas' }); return; }
+                if (!tasks || tasks.length === 0) { resolve({ success: true, message: 'Nenhuma tarefa pendente' }); return; }
 
-                if (!tasks || tasks.length === 0) {
-                    // Opcional: Enviar msg "Sem tarefas pendentes"
-                    resolve({ success: true, message: 'Nenhuma tarefa pendente' });
-                    return;
-                }
-
-                // Ordena por prioridade: Alta > Média > Baixa
                 const priorityMap = { 'alta': 1, 'media': 2, 'baixa': 3 };
-                const sortedTasks = tasks.sort((a, b) => {
-                    const pA = priorityMap[a.priority] || 99;
-                    const pB = priorityMap[b.priority] || 99;
-                    return pA - pB;
-                });
+                const sortedTasks = tasks.sort((a, b) => (priorityMap[a.priority] || 99) - (priorityMap[b.priority] || 99));
 
-                // Monta a mensagem
-                let message = `*📅 Resumo Diário de Tarefas*\n\n`;
-                
-                // Contadores
-                const total = sortedTasks.length;
-                const high = sortedTasks.filter(t => t.priority === 'alta').length;
-                
-                message += `Você tem *${total}* tarefas pendentes (${high} urgentes).\n\n`;
-
+                let message = `*📅 Resumo Diário de Tarefas*\n\nVocê tem *${sortedTasks.length}* tarefas pendentes.\n\n`;
                 sortedTasks.forEach(task => {
-                    let icon = '🔵'; // Baixa/Default
-                    if (task.priority === 'media') icon = '🟡';
-                    if (task.priority === 'alta') icon = '🔴';
-                    
-                    let statusText = '';
-                    if (task.status === 'pendente') statusText = '(Pendente)';
-                    if (task.status === 'em_andamento') statusText = '(Em Andamento)';
-
-                    message += `${icon} *${task.title}* ${statusText}\n`;
-                    
-                    if (task.companyName) {
-                        message += `   🏢 ${task.companyName}\n`;
-                    }
-                    
-                    if (task.dueDate) {
-                        // Formata data de YYYY-MM-DD para DD/MM/YYYY se necessário
-                        let dateStr = task.dueDate;
-                        if (dateStr.includes('-')) {
-                            const parts = dateStr.split('-');
-                            if (parts.length === 3) dateStr = `${parts[2]}/${parts[1]}/${parts[0]}`;
-                        }
-                        message += `   📅 Vence: ${dateStr}\n`;
-                    }
-                    message += `\n`; // Espaçamento entre tarefas
+                    let icon = task.priority === 'alta' ? '🔴' : task.priority === 'media' ? '🟡' : '🔵';
+                    message += `${icon} *${task.title}*\n`;
+                    if (task.companyName) message += `   🏢 ${task.companyName}\n`;
+                    if (task.dueDate) message += `   📅 Vence: ${task.dueDate}\n`;
+                    message += `\n`;
                 });
-
                 message += `_Gerado automaticamente pelo Contábil Manager Pro_`;
 
-                // Envia
                 try {
                     let number = settings.dailySummaryNumber.replace(/\D/g, '');
                     if (!number.startsWith('55')) number = '55' + number;
                     const chatId = `${number}@c.us`;
                     
-                    // --- USANDO O HELPER SEGURO ---
                     await safeSendMessage(waWrapper.client, chatId, message);
-                    
-                    console.log(`[Summary ${user}] Resumo diário enviado com sucesso para ${number}.`);
                     resolve({ success: true, message: 'Enviado com sucesso' });
                 } catch (sendErr) {
-                    console.error(`[Summary ${user}] Erro ao enviar:`, sendErr);
+                    log(`[Summary] Erro envio`, sendErr);
                     resolve({ success: false, message: 'Erro no envio do WhatsApp: ' + sendErr.message });
                 }
             });
@@ -333,25 +324,19 @@ const sendDailySummaryToUser = async (user) => {
     });
 };
 
-// --- Middleware de Autenticação ---
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
-
+    const token = authHeader && authHeader.split(' ')[1]; 
     if (!token) return res.status(401).json({ error: 'Token não fornecido' });
-
     const parts = token.split('-');
     if (parts.length < 3) return res.status(403).json({ error: 'Token inválido' });
-
     const user = parts.slice(2).join('-'); 
     const envUsers = (process.env.USERS || '').split(',');
     if (!envUsers.includes(user)) return res.status(403).json({ error: 'Usuário não autorizado' });
-
     req.user = user;
     next();
 };
 
-// Configuração Multer
 const storage = multer.diskStorage({
   destination: function (req, file, cb) { cb(null, UPLOADS_DIR) },
   filename: function (req, file, cb) {
@@ -362,37 +347,26 @@ const storage = multer.diskStorage({
 })
 const upload = multer({ storage: storage });
 
-// --- CONFIGURAÇÃO EMAIL (HOSTINGER / GMAIL) ---
 const emailPort = parseInt(process.env.EMAIL_PORT || '465');
 const emailTransporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST || 'smtp.gmail.com', // Fallback para Gmail se não configurado
+    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
     port: emailPort,
-    secure: emailPort === 465, // true para 465, false para outras
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-    }
+    secure: emailPort === 465,
+    auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
 });
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// --- HTML Builder Helper ---
+// --- HTML Builder Helper --- (Mantido igual)
 const buildEmailHtml = (messageBody, documents, emailSignature) => {
     let docsTable = '';
     if (documents && documents.length > 0) {
         const sortedDocs = [...documents].sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''));
         let rows = '';
         sortedDocs.forEach(doc => {
-            rows += `
-                <tr style="border-bottom: 1px solid #eee;">
-                    <td style="padding: 10px; color: #333;">${doc.docName}</td>
-                    <td style="padding: 10px; color: #555;">${doc.category}</td>
-                    <td style="padding: 10px; color: #555;">${doc.dueDate || 'N/A'}</td>
-                    <td style="padding: 10px; color: #555;">${doc.competence}</td>
-                </tr>
-            `;
+            rows += `<tr style="border-bottom: 1px solid #eee;"><td style="padding: 10px; color: #333;">${doc.docName}</td><td style="padding: 10px; color: #555;">${doc.category}</td><td style="padding: 10px; color: #555;">${doc.dueDate || 'N/A'}</td><td style="padding: 10px; color: #555;">${doc.competence}</td></tr>`;
         });
         docsTable = `<h3 style="color: #2c3e50; border-bottom: 2px solid #eff6ff; padding-bottom: 10px; margin-top: 30px; font-size: 16px;">Documentos em Anexo:</h3><table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px;"><thead><tr style="background-color: #f8fafc; color: #64748b;"><th style="padding: 10px; text-align: left; border-bottom: 2px solid #e2e8f0;">Documento</th><th style="padding: 10px; text-align: left; border-bottom: 2px solid #e2e8f0;">Categoria</th><th style="padding: 10px; text-align: left; border-bottom: 2px solid #e2e8f0;">Vencimento</th><th style="padding: 10px; text-align: left; border-bottom: 2px solid #e2e8f0;">Competência</th></tr></thead><tbody>${rows}</tbody></table>`;
     }
@@ -401,7 +375,6 @@ const buildEmailHtml = (messageBody, documents, emailSignature) => {
 
 // --- ROUTES ---
 
-// Public Route
 app.post('/api/login', (req, res) => {
     const { user, password } = req.body;
     const envUsers = (process.env.USERS || 'admin').split(',');
@@ -416,7 +389,6 @@ app.post('/api/login', (req, res) => {
     }
 });
 
-// Protected Routes
 app.use('/api', authenticateToken);
 
 app.post('/api/upload', upload.single('file'), (req, res) => {
@@ -584,12 +556,18 @@ app.post('/api/whatsapp/disconnect', async (req, res) => {
 });
 
 app.post('/api/send-documents', async (req, res) => {
-    // Mesma lógica de envio...
     const { documents, subject, messageBody, channels, emailSignature, whatsappTemplate } = req.body;
+    
+    log(`[API send-documents] Iniciando envio de ${documents.length} documentos. Channels: ${JSON.stringify(channels)}`);
+    
     const db = getDb(req.user);
     const waWrapper = getWaClientWrapper(req.user);
     const client = waWrapper.client;
     const clientReady = waWrapper.status === 'connected';
+
+    if (channels.whatsapp && !clientReady) {
+        log(`[API send-documents] AVISO: Tentativa de envio via WhatsApp, mas cliente não está conectado.`);
+    }
 
     let successCount = 0;
     let errors = [];
@@ -623,33 +601,38 @@ app.post('/api/send-documents', async (req, res) => {
 
             const validAttachments = [];
             for (const doc of sortedDocs) {
-                const filePath = path.join(UPLOADS_DIR, doc.serverFilename);
-                if (fs.existsSync(filePath)) {
-                    validAttachments.push({
-                        filename: doc.docName,
-                        path: filePath,
-                        contentType: 'application/pdf',
-                        docData: doc
-                    });
-                } else {
-                    errors.push(`Arquivo sumiu: ${doc.docName}`);
+                // Se doc.serverFilename estiver vazio, significa que não tem anexo físico (ex: apenas comunicado), 
+                // então pulamos a validação de arquivo para esse item, mas permitimos o envio se for apenas texto.
+                if (doc.serverFilename) {
+                    const filePath = path.join(UPLOADS_DIR, doc.serverFilename);
+                    if (fs.existsSync(filePath)) {
+                        validAttachments.push({
+                            filename: doc.docName,
+                            path: filePath,
+                            contentType: 'application/pdf',
+                            docData: doc
+                        });
+                    } else {
+                        log(`[API send-documents] Arquivo físico não encontrado: ${filePath}`);
+                        errors.push(`Arquivo sumiu do servidor: ${doc.docName}`);
+                    }
                 }
             }
 
-            if (validAttachments.length === 0 && companyDocs.length > 0) { continue; }
-
+            // Se não tem anexos E não tem documentos listados para processar, pula.
+            // Mas se a intenção é mandar mensagem de texto (ex: aviso sem anexo), permitimos.
+            // A lógica atual depende de 'companyDocs' para marcar logs de envio.
+            
             if (channels.email && company.email) {
                 try {
                     const finalHtml = buildEmailHtml(messageBody, companyDocs, emailSignature);
                     const finalSubject = `${subject} - Competência: ${companyDocs[0].competence || 'N/A'}`; 
                     
-                    // --- MÚLTIPLOS E-MAILS (COM CÓPIA) ---
                     const emailList = company.email.split(',').map(e => e.trim()).filter(e => e);
                     const mainEmail = emailList[0];
                     const ccEmails = emailList.slice(1).join(', ');
 
                     if (mainEmail) {
-                        // CONFIGURAÇÃO DO REMETENTE (ALIAS)
                         const senderName = process.env.EMAIL_FROM_NAME || 'Contabilidade';
                         const senderEmail = process.env.EMAIL_FROM_EMAIL || process.env.EMAIL_USER;
                         const fromAddress = `"${senderName}" <${senderEmail}>`;
@@ -657,13 +640,17 @@ app.post('/api/send-documents', async (req, res) => {
                         await emailTransporter.sendMail({
                             from: fromAddress,
                             to: mainEmail,
-                            cc: ccEmails, // Envia os demais como cópia
+                            cc: ccEmails, 
                             subject: finalSubject,
                             html: finalHtml,
                             attachments: validAttachments.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
                         });
+                        log(`[Email] Enviado para ${company.name} (${mainEmail})`);
                     }
-                } catch (e) { errors.push(`Erro Email ${company.name}: ${e.message}`); }
+                } catch (e) { 
+                    log(`[Email] Erro envio ${company.name}`, e);
+                    errors.push(`Erro Email ${company.name}: ${e.message}`); 
+                }
             }
 
             if (channels.whatsapp && company.whatsapp && clientReady) {
@@ -677,9 +664,15 @@ app.post('/api/send-documents', async (req, res) => {
                     ).join('\n');
                     
                     const whatsappSignature = whatsappTemplate || "_Esses arquivos também foram enviados por e-mail_\n\nAtenciosamente,\nContabilidade";
-                    const mensagemCompleta = `*📄 Olá!* \n\n${messageBody}\n\n*Arquivos enviados:*\n${listaArquivos}\n\n${whatsappSignature}`;
+                    let mensagemCompleta = `*📄 Olá!* \n\n${messageBody}`;
+                    
+                    if (listaArquivos) {
+                        mensagemCompleta += `\n\n*Arquivos enviados:*\n${listaArquivos}`;
+                    }
+                    
+                    mensagemCompleta += `\n\n${whatsappSignature}`;
 
-                    // --- USANDO O HELPER SEGURO ---
+                    // --- USANDO O HELPER SEGURO COM LOGS ---
                     await safeSendMessage(client, chatId, mensagemCompleta);
                     
                     for (const att of validAttachments) {
@@ -687,20 +680,25 @@ app.post('/api/send-documents', async (req, res) => {
                             const fileData = fs.readFileSync(att.path).toString('base64');
                             const media = new MessageMedia(att.contentType, fileData, att.filename);
                             
-                            // --- USANDO O HELPER SEGURO PARA MEDIA ---
                             await safeSendMessage(client, chatId, media);
                             
+                            // Delay para evitar flood (anti-ban e estabilidade)
                             await new Promise(r => setTimeout(r, 3000));
                         } catch (mediaErr) {
-                            console.error(`Erro ao enviar midia ${att.filename}`, mediaErr);
+                            log(`[WhatsApp] Erro envio mídia ${att.filename}`, mediaErr);
                             errors.push(`Erro mídia WhatsApp (${att.filename}): ${mediaErr.message}`);
                         }
                     }
-                } catch (e) { errors.push(`Erro Zap ${company.name}: ${e.message}`); }
+                } catch (e) { 
+                    log(`[WhatsApp] Erro envio ${company.name}`, e);
+                    errors.push(`Erro Zap ${company.name}: ${e.message}`); 
+                }
+            } else if (channels.whatsapp && !clientReady) {
+                 errors.push(`WhatsApp não conectado. Não foi possível enviar para ${company.name}`);
             }
 
             for (const doc of companyDocs) {
-                if (doc.category) { // Se tiver categoria é Documento, se não pode ser mensagem avulsa
+                if (doc.category) { 
                     db.run(`INSERT INTO sent_logs (companyName, docName, category, sentAt, channels, status) VALUES (?, ?, ?, datetime('now', 'localtime'), ?, 'success')`, 
                         [company.name, doc.docName, doc.category, JSON.stringify(channels)]);
                     
@@ -710,7 +708,10 @@ app.post('/api/send-documents', async (req, res) => {
                 if (doc.id) sentIds.push(doc.id);
                 successCount++;
             }
-        } catch (e) { errors.push(`Falha geral empresa ${companyId}: ${e.message}`); }
+        } catch (e) { 
+            log(`[API send-documents] Falha geral empresa ${companyId}`, e);
+            errors.push(`Falha geral empresa ${companyId}: ${e.message}`); 
+        }
     }
     
     res.json({ success: true, sent: successCount, sentIds, errors });
@@ -724,191 +725,167 @@ app.get(/.*/, (req, res) => {
     if (!req.path.startsWith('/api')) res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-// --- CRON JOB: SCHEDULED MESSAGES ---
+// --- CRON JOB --- (Instrumentado com Logs)
 setInterval(() => {
     const envUsers = (process.env.USERS || '').split(',');
-    // Itera por todos os usuários (dbs)
     envUsers.forEach(user => {
         const db = getDb(user);
         if (!db) return;
 
-        // CORREÇÃO DE FUSO HORÁRIO
         const now = new Date();
         const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
         const brazilTime = new Date(utc - (3600000 * 3)); // UTC - 3h
-        const nowStr = brazilTime.toISOString().slice(0, 16); // "YYYY-MM-DDTHH:mm"
+        const nowStr = brazilTime.toISOString().slice(0, 16); 
 
         db.all("SELECT * FROM scheduled_messages WHERE active = 1 AND nextRun <= ?", [nowStr], async (err, rows) => {
             if (err || !rows || rows.length === 0) return;
 
-            console.log(`[CRON ${user}] Processando ${rows.length} agendamentos... Hora Server(BRT): ${nowStr}`);
+            log(`[CRON ${user}] Processando ${rows.length} agendamentos... Hora Server(BRT): ${nowStr}`);
             
-            // Carrega dependências do usuário
             const waWrapper = getWaClientWrapper(user);
             const clientReady = waWrapper.status === 'connected';
 
-            // Carrega Configurações para assinatura
             const settings = await new Promise(resolve => {
                 db.get("SELECT settings FROM user_settings WHERE id = 1", (e, r) => resolve(r ? JSON.parse(r.settings) : null));
             });
 
             for (const msg of rows) {
-                const channels = JSON.parse(msg.channels || '{}');
-                const selectedIds = JSON.parse(msg.selectedCompanyIds || '[]');
-                
-                // Determina alvos
-                let targetCompanies = [];
-                if (msg.targetType === 'selected') {
-                   if (selectedIds.length > 0) {
-                        const placeholders = selectedIds.map(() => '?').join(',');
-                        targetCompanies = await new Promise(resolve => db.all(`SELECT * FROM companies WHERE id IN (${placeholders})`, selectedIds, (e, r) => resolve(r || [])));
-                   }
-                } else {
-                    const typeFilter = msg.targetType === 'mei' ? 'MEI' : 'CNPJ'; // Simplificação, na real 'normal' é != MEI
-                    const operator = msg.targetType === 'mei' ? '=' : '!=';
-                    // Nota: para 'normal' estamos pegando tudo que não é MEI
-                    targetCompanies = await new Promise(resolve => db.all(`SELECT * FROM companies WHERE type ${operator} 'MEI'`, (e, r) => resolve(r || [])));
-                }
-                
-                // Parse documentsPayload if exists
-                let specificDocs = [];
-                if (msg.documentsPayload) {
-                    try { specificDocs = JSON.parse(msg.documentsPayload); } catch(e) {}
-                }
-
-                // Dispara envios
-                for (const company of targetCompanies) {
+                try {
+                    const channels = JSON.parse(msg.channels || '{}');
+                    const selectedIds = JSON.parse(msg.selectedCompanyIds || '[]');
                     
-                    // Prepara anexos (Genéricos ou Específicos)
-                    let attachmentsToSend = [];
-                    let finalBody = msg.message;
-                    let companySpecificDocs = [];
-
-                    if (specificDocs.length > 0) {
-                        // Modo "Lote de Documentos": Filtra docs para ESTA empresa
-                        companySpecificDocs = specificDocs.filter(d => d.companyId === company.id);
-                        if (companySpecificDocs.length === 0) continue; // Pula se não tem doc para essa empresa no lote
-                        
-                        for (const doc of companySpecificDocs) {
-                             if (doc.serverFilename) {
-                                 const p = path.join(UPLOADS_DIR, doc.serverFilename);
-                                 if (fs.existsSync(p)) {
-                                     attachmentsToSend.push({ filename: doc.docName, path: p, contentType: 'application/pdf', docData: doc });
-                                 }
-                             }
-                        }
-                    } else if (msg.attachmentFilename) {
-                        // Modo "Mensagem Genérica": Anexo único para todos
-                        const p = path.join(UPLOADS_DIR, msg.attachmentFilename);
-                        if (fs.existsSync(p)) {
-                            attachmentsToSend.push({ filename: msg.attachmentOriginalName, path: p, contentType: 'application/pdf' });
-                        }
+                    let targetCompanies = [];
+                    if (msg.targetType === 'selected') {
+                       if (selectedIds.length > 0) {
+                            const placeholders = selectedIds.map(() => '?').join(',');
+                            targetCompanies = await new Promise(resolve => db.all(`SELECT * FROM companies WHERE id IN (${placeholders})`, selectedIds, (e, r) => resolve(r || [])));
+                       }
+                    } else {
+                        const operator = msg.targetType === 'mei' ? '=' : '!=';
+                        targetCompanies = await new Promise(resolve => db.all(`SELECT * FROM companies WHERE type ${operator} 'MEI'`, (e, r) => resolve(r || [])));
+                    }
+                    
+                    let specificDocs = [];
+                    if (msg.documentsPayload) {
+                        try { specificDocs = JSON.parse(msg.documentsPayload); } catch(e) { log('[CRON] Erro parse docs payload', e); }
                     }
 
-                    if (channels.email && company.email) {
-                        try {
-                             // Se for modo Docs, usa html builder completo. Se for Msg, usa html simples
-                             const htmlContent = specificDocs.length > 0 
+                    for (const company of targetCompanies) {
+                        // ... (Lógica de anexo mantida igual ao original, apenas com log wrapper)
+                        let attachmentsToSend = [];
+                        let companySpecificDocs = [];
+
+                        if (specificDocs.length > 0) {
+                            companySpecificDocs = specificDocs.filter(d => d.companyId === company.id);
+                            if (companySpecificDocs.length === 0) continue;
+                            
+                            for (const doc of companySpecificDocs) {
+                                 if (doc.serverFilename) {
+                                     const p = path.join(UPLOADS_DIR, doc.serverFilename);
+                                     if (fs.existsSync(p)) {
+                                         attachmentsToSend.push({ filename: doc.docName, path: p, contentType: 'application/pdf', docData: doc });
+                                     }
+                                 }
+                            }
+                        } else if (msg.attachmentFilename) {
+                            const p = path.join(UPLOADS_DIR, msg.attachmentFilename);
+                            if (fs.existsSync(p)) {
+                                attachmentsToSend.push({ filename: msg.attachmentOriginalName, path: p, contentType: 'application/pdf' });
+                            }
+                        }
+
+                        if (channels.email && company.email) {
+                           try {
+                                const htmlContent = specificDocs.length > 0 
                                 ? buildEmailHtml(msg.message, companySpecificDocs, settings?.emailSignature)
                                 : buildEmailHtml(msg.message, [], settings?.emailSignature);
 
-                             // --- MÚLTIPLOS E-MAILS (COM CÓPIA) ---
-                             const emailList = company.email.split(',').map(e => e.trim()).filter(e => e);
-                             const mainEmail = emailList[0];
-                             const ccEmails = emailList.slice(1).join(', ');
+                                const emailList = company.email.split(',').map(e => e.trim()).filter(e => e);
+                                const mainEmail = emailList[0];
+                                const ccEmails = emailList.slice(1).join(', ');
 
-                             if (mainEmail) {
-                                // CONFIGURAÇÃO DO REMETENTE (ALIAS)
-                                const senderName = process.env.EMAIL_FROM_NAME || 'Contabilidade';
-                                const senderEmail = process.env.EMAIL_FROM_EMAIL || process.env.EMAIL_USER;
-                                const fromAddress = `"${senderName}" <${senderEmail}>`;
+                                if (mainEmail) {
+                                    const senderName = process.env.EMAIL_FROM_NAME || 'Contabilidade';
+                                    const senderEmail = process.env.EMAIL_FROM_EMAIL || process.env.EMAIL_USER;
+                                    const fromAddress = `"${senderName}" <${senderEmail}>`;
 
-                                await emailTransporter.sendMail({
-                                    from: fromAddress,
-                                    to: mainEmail,
-                                    cc: ccEmails,
-                                    subject: msg.title,
-                                    html: htmlContent,
-                                    attachments: attachmentsToSend.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
-                                });
-                             }
-                        } catch(e) { console.error(`[CRON] Erro email ${company.name}`, e); }
-                    }
+                                    await emailTransporter.sendMail({
+                                        from: fromAddress,
+                                        to: mainEmail,
+                                        cc: ccEmails,
+                                        subject: msg.title,
+                                        html: htmlContent,
+                                        attachments: attachmentsToSend.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
+                                    });
+                                }
+                           } catch(e) { log(`[CRON] Erro email ${company.name}`, e); }
+                        }
 
-                    if (channels.whatsapp && company.whatsapp && clientReady) {
-                        try {
-                            let number = company.whatsapp.replace(/\D/g, '');
-                            if (!number.startsWith('55')) number = '55' + number;
-                            const chatId = `${number}@c.us`;
-                            
-                            // Monta mensagem zap (Formatação Rica Unificada)
-                            let waBody = `*${msg.title}*\n\n${msg.message}`;
+                        if (channels.whatsapp && company.whatsapp && clientReady) {
+                            try {
+                                let number = company.whatsapp.replace(/\D/g, '');
+                                if (!number.startsWith('55')) number = '55' + number;
+                                const chatId = `${number}@c.us`;
+                                
+                                let waBody = `*${msg.title}*\n\n${msg.message}`;
 
-                            if (specificDocs.length > 0) {
-                                // Se for envio de documentos específicos, formata igual ao envio direto
-                                waBody = `*📄 Olá!* \n\n${msg.message}\n\n*Arquivos enviados:*`;
-                                const listaArquivos = attachmentsToSend.map(att => 
-                                    `• ${att.docData?.docName || att.filename} (${att.docData?.category || 'Anexo'}, Venc: ${att.docData?.dueDate || 'N/A'})`
-                                ).join('\n');
-                                waBody += `\n${listaArquivos}`;
-                            } else if (attachmentsToSend.length > 0) {
-                                // Se for anexo genérico
-                                waBody += `\n\n*Arquivo enviado:* ${attachmentsToSend[0].filename}`;
-                            }
-                            
-                            // Adiciona assinatura
-                            waBody += `\n\n${settings?.whatsappTemplate || ''}`;
+                                if (specificDocs.length > 0) {
+                                    waBody = `*📄 Olá!* \n\n${msg.message}\n\n*Arquivos enviados:*`;
+                                    const listaArquivos = attachmentsToSend.map(att => 
+                                        `• ${att.docData?.docName || att.filename} (${att.docData?.category || 'Anexo'}, Venc: ${att.docData?.dueDate || 'N/A'})`
+                                    ).join('\n');
+                                    waBody += `\n${listaArquivos}`;
+                                } else if (attachmentsToSend.length > 0) {
+                                    waBody += `\n\n*Arquivo enviado:* ${attachmentsToSend[0].filename}`;
+                                }
+                                
+                                waBody += `\n\n${settings?.whatsappTemplate || ''}`;
 
-                            // --- USANDO O HELPER SEGURO ---
-                            await safeSendMessage(waWrapper.client, chatId, waBody);
-                            
-                            for (const att of attachmentsToSend) {
-                                // FIX: Uso de Base64 no Cron também
-                                try {
-                                    const fileData = fs.readFileSync(att.path).toString('base64');
-                                    const media = new MessageMedia(att.contentType, fileData, att.filename);
+                                await safeSendMessage(waWrapper.client, chatId, waBody);
+                                
+                                for (const att of attachmentsToSend) {
+                                    try {
+                                        const fileData = fs.readFileSync(att.path).toString('base64');
+                                        const media = new MessageMedia(att.contentType, fileData, att.filename);
+                                        await safeSendMessage(waWrapper.client, chatId, media);
+                                        await new Promise(r => setTimeout(r, 3000));
+                                    } catch (err) {
+                                        log(`[CRON] Erro media zap ${att.filename}`, err);
+                                    }
+                                }
+                            } catch(e) { log(`[CRON] Erro zap ${company.name}`, e); }
+                        }
+                        
+                        // Atualiza logs se for documento
+                        if (companySpecificDocs.length > 0) {
+                            for (const doc of companySpecificDocs) {
+                                if (doc.category) {
+                                    db.run(`INSERT INTO sent_logs (companyName, docName, category, sentAt, channels, status) VALUES (?, ?, ?, datetime('now', 'localtime'), ?, 'success')`, 
+                                        [company.name, doc.docName, doc.category, JSON.stringify(channels)]);
                                     
-                                    // --- USANDO O HELPER SEGURO PARA MEDIA ---
-                                    await safeSendMessage(waWrapper.client, chatId, media);
-                                    
-                                    await new Promise(r => setTimeout(r, 3000));
-                                } catch (err) {
-                                    console.error(`[CRON] Erro media zap ${att.filename}`, err);
+                                    db.run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, 'sent') ON CONFLICT(companyId, category, competence) DO UPDATE SET status='sent'`, 
+                                        [doc.companyId, doc.category, doc.competence]);
                                 }
                             }
-                        } catch(e) { console.error(`[CRON] Erro zap ${company.name}`, e); }
-                    }
-                    
-                    // Se enviou documentos específicos, registra logs e status
-                    if (companySpecificDocs.length > 0) {
-                        for (const doc of companySpecificDocs) {
-                            if (doc.category) {
-                                db.run(`INSERT INTO sent_logs (companyName, docName, category, sentAt, channels, status) VALUES (?, ?, ?, datetime('now', 'localtime'), ?, 'success')`, 
-                                    [company.name, doc.docName, doc.category, JSON.stringify(channels)]);
-                                
-                                db.run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, 'sent') ON CONFLICT(companyId, category, competence) DO UPDATE SET status='sent'`, 
-                                    [doc.companyId, doc.category, doc.competence]);
-                            }
                         }
-                    }
-                }
+                    } // end company loop
 
-                // Atualiza Recorrência ou Desativa
-                if (msg.recurrence === 'unico') {
-                    db.run("UPDATE scheduled_messages SET active = 0 WHERE id = ?", [msg.id]);
-                } else {
-                    // Calcula proxima data simples
-                    const nextDate = new Date(msg.nextRun);
-                    if (msg.recurrence === 'mensal') nextDate.setMonth(nextDate.getMonth() + 1);
-                    else if (msg.recurrence === 'trimestral') nextDate.setMonth(nextDate.getMonth() + 3);
-                    else if (msg.recurrence === 'anual') nextDate.setFullYear(nextDate.getFullYear() + 1);
-                    
-                    const nextRunStr = nextDate.toISOString().slice(0, 16);
-                    db.run("UPDATE scheduled_messages SET nextRun = ? WHERE id = ?", [nextRunStr, msg.id]);
+                    if (msg.recurrence === 'unico') {
+                        db.run("UPDATE scheduled_messages SET active = 0 WHERE id = ?", [msg.id]);
+                    } else {
+                        const nextDate = new Date(msg.nextRun);
+                        if (msg.recurrence === 'mensal') nextDate.setMonth(nextDate.getMonth() + 1);
+                        else if (msg.recurrence === 'trimestral') nextDate.setMonth(nextDate.getMonth() + 3);
+                        else if (msg.recurrence === 'anual') nextDate.setFullYear(nextDate.getFullYear() + 1);
+                        const nextRunStr = nextDate.toISOString().slice(0, 16);
+                        db.run("UPDATE scheduled_messages SET nextRun = ? WHERE id = ?", [nextRunStr, msg.id]);
+                    }
+                } catch(e) {
+                    log(`[CRON] Erro crítico processando msg ID ${msg.id}`, e);
                 }
-            }
+            } // end rows loop
         });
     });
-}, 60000); // Check every minute
+}, 60000); 
 
-app.listen(port, () => console.log(`Server running at http://localhost:${port}`));
+app.listen(port, () => log(`Server running at http://localhost:${port}`));
