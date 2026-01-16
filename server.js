@@ -82,18 +82,48 @@ const safeSendMessage = async (client, chatId, content, options = {}) => {
     try {
         if (!client) throw new Error("Client é null");
 
-        // Tenta enviar diretamente. Em versões recentes, getChatById tem causado crash se o chat não estiver indexado.
-        // O sendMessage direto costuma ser mais seguro para chats não carregados.
-        const msg = await client.sendMessage(chatId, content, options);
-        log(`[WhatsApp] Mensagem enviada (Direct). ID: ${msg.id.id}`);
-        return msg;
+        // CORREÇÃO CRÍTICA (markedUnread error):
+        // Forçamos sendSeen: false para pular a etapa que está quebrada na versão atual do WhatsApp Web.
+        const safeOptions = { 
+            ...options, 
+            sendSeen: false // Evita o crash 'markedUnread'
+        };
+
+        // 1. Verifica se o número é válido no WhatsApp
+        let finalChatId = chatId;
+        
+        // Tenta limpar o sufixo para garantir formato correto
+        if (!finalChatId.includes('@')) {
+             throw new Error("ChatId mal formatado");
+        }
+
+        // Tenta obter o chat. 
+        try {
+            const chat = await client.getChatById(finalChatId);
+            log(`[WhatsApp] Chat encontrado: ${chat.name || 'Sem nome'} (${finalChatId})`);
+            
+            // REMOVIDO: sendStateTyping também quebra quando o modelo interno muda.
+            // await chat.sendStateTyping();
+            // await new Promise(r => setTimeout(r, 500)); 
+            
+            const msg = await chat.sendMessage(content, safeOptions);
+            log(`[WhatsApp] Mensagem enviada com sucesso. ID: ${msg.id.id}`);
+            return msg;
+        } catch (chatError) {
+            log(`[WhatsApp] Erro ao obter objeto Chat. Tentando envio direto (Fallback). Erro: ${chatError.message}`);
+            
+            // Fallback: Envio direto ignorando o objeto Chat
+            const msg = await client.sendMessage(finalChatId, content, safeOptions);
+            log(`[WhatsApp] Mensagem enviada via Fallback (client.sendMessage). ID: ${msg.id.id}`);
+            return msg;
+        }
 
     } catch (error) {
-        log(`[WhatsApp] FALHA NO ENVIO para ${chatId}`, error);
+        log(`[WhatsApp] FALHA CRÍTICA NO ENVIO para ${chatId}`, error);
         
         // Detecção específica do erro 'markedUnread'
         if (error.message && error.message.includes('markedUnread')) {
-            log(`[WhatsApp CRITICAL] Erro de 'markedUnread' detectado. Isso indica sessão corrompida por atualização do WhatsApp. É necessário RESETAR a conexão.`);
+            log(`[WhatsApp CRITICAL] Erro de 'markedUnread' detectado. A correção 'sendSeen: false' falhou ou o erro está em outra etapa.`);
         }
         
         throw error;
@@ -665,6 +695,8 @@ app.post('/api/send-documents', async (req, res) => {
                             const media = new MessageMedia(att.contentType, fileData, att.filename);
                             
                             await safeSendMessage(client, chatId, media);
+                            
+                            // Delay para evitar flood
                             await new Promise(r => setTimeout(r, 3000));
                         } catch (mediaErr) {
                             log(`[WhatsApp] Erro envio mídia ${att.filename}`, mediaErr);
