@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Smartphone, RefreshCw, CheckCircle2, Loader2, Power, QrCode } from 'lucide-react';
+import { Smartphone, RefreshCw, CheckCircle2, Loader2, Power, QrCode, Trash2, AlertTriangle } from 'lucide-react';
 import { api } from '../services/api';
 
 const WhatsAppConnect: React.FC = () => {
   const [status, setStatus] = useState<'disconnected' | 'generating_qr' | 'ready' | 'connected'>('disconnected');
   const [qrCodeBase64, setQrCodeBase64] = useState<string | null>(null);
   const [sessionInfo, setSessionInfo] = useState<any>(null);
-  const [polling, setPolling] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
 
   const fetchStatus = async () => {
       try {
@@ -41,6 +41,22 @@ const WhatsAppConnect: React.FC = () => {
       }
   };
 
+  const handleHardReset = async () => {
+      if(confirm('ATENÇÃO: Isso irá apagar todos os dados da sessão e forçar um novo QR Code. Use isso se o WhatsApp estiver travado ou com erros de envio. Continuar?')) {
+          setIsResetting(true);
+          try {
+              await api.resetWhatsAppSession();
+              alert("Sessão resetada. Aguarde alguns segundos e escaneie o novo QR Code.");
+              setStatus('disconnected');
+              setQrCodeBase64(null);
+          } catch (e: any) {
+              alert("Erro ao resetar: " + e.message);
+          } finally {
+              setIsResetting(false);
+          }
+      }
+  };
+
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-8 animate-in fade-in duration-500">
       <div className="text-center">
@@ -52,7 +68,7 @@ const WhatsAppConnect: React.FC = () => {
         </p>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-lg border border-gray-100 w-full max-w-md overflow-hidden p-8 text-center">
+      <div className="bg-white rounded-2xl shadow-lg border border-gray-100 w-full max-w-md overflow-hidden p-8 text-center relative">
           
           {status === 'disconnected' && (
               <div className="space-y-6">
@@ -123,10 +139,23 @@ const WhatsAppConnect: React.FC = () => {
                     onClick={handleDisconnect}
                     className="text-red-500 hover:text-red-700 text-sm font-medium flex items-center justify-center gap-2 w-full py-2 hover:bg-red-50 rounded-lg transition-colors"
                   >
-                      <Power className="w-4 h-4" /> Desconectar
+                      <Power className="w-4 h-4" /> Desconectar Normal
                   </button>
               </div>
           )}
+
+          {/* Hard Reset Button - Always visible at bottom if needed */}
+          <div className="mt-8 pt-4 border-t border-gray-100">
+              <button 
+                onClick={handleHardReset}
+                disabled={isResetting}
+                className="text-xs text-orange-500 hover:text-orange-700 flex items-center justify-center gap-2 w-full transition-colors"
+                title="Use se o WhatsApp estiver travado ou com erros"
+              >
+                  {isResetting ? <Loader2 className="w-3 h-3 animate-spin" /> : <AlertTriangle className="w-3 h-3" />}
+                  {isResetting ? "Resetando..." : "Problemas? Resetar Conexão (Limpar Sessão)"}
+              </button>
+          </div>
 
       </div>
       

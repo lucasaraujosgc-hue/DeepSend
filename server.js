@@ -33,19 +33,14 @@ const log = (message, error = null) => {
     let errorDetail = '';
     
     if (error) {
-        // Extrai detalhes do erro (message, stack, etc)
         errorDetail = `\nERROR: ${error.message}`;
         if (error.stack) errorDetail += `\nSTACK: ${error.stack}`;
-        if (JSON.stringify(error) !== '{}') errorDetail += `\nJSON: ${JSON.stringify(error)}`;
     }
 
     const logMessage = `[${timestamp}] ${message}${errorDetail}\n`;
-    
-    // Escreve no Console (Easypanel logs)
     console.log(`[APP] ${message}`);
     if (error) console.error(error);
 
-    // Escreve no Arquivo (persistência)
     try {
         fs.appendFileSync(LOG_FILE, logMessage);
     } catch (e) {
@@ -56,10 +51,9 @@ const log = (message, error = null) => {
 log("Servidor iniciando...");
 log(`Diretório de dados: ${DATA_DIR}`);
 
-// --- HELPER: Puppeteer Lock Cleaner (CORREÇÃO DE ERRO CODE 21) ---
+// --- HELPER: Puppeteer Lock Cleaner ---
 const cleanPuppeteerLocks = (dir) => {
     const locks = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
-    
     if (fs.existsSync(dir)) {
         locks.forEach(lock => {
             const lockPath = path.join(dir, lock);
@@ -67,23 +61,15 @@ const cleanPuppeteerLocks = (dir) => {
                 try {
                     fs.unlinkSync(lockPath);
                     log(`[Puppeteer Fix] Trava removida: ${lockPath}`);
-                } catch (e) {
-                    log(`[Puppeteer Fix] Falha ao remover trava: ${lockPath}`, e);
-                }
+                } catch (e) {}
             }
         });
-        
         const defaultDir = path.join(dir, 'Default');
         if (fs.existsSync(defaultDir)) {
              locks.forEach(lock => {
                 const lockPath = path.join(defaultDir, lock);
                 if (fs.existsSync(lockPath)) {
-                    try {
-                        fs.unlinkSync(lockPath);
-                        log(`[Puppeteer Fix] Trava removida (Default): ${lockPath}`);
-                    } catch (e) {
-                        log(`[Puppeteer Fix] Falha ao remover trava (Default): ${lockPath}`, e);
-                    }
+                    try { fs.unlinkSync(lockPath); } catch (e) {}
                 }
             });
         }
@@ -94,42 +80,22 @@ const cleanPuppeteerLocks = (dir) => {
 const safeSendMessage = async (client, chatId, content, options = {}) => {
     log(`[WhatsApp] Tentando enviar mensagem para: ${chatId}`);
     try {
-        // Verificação de Estado do Cliente
         if (!client) throw new Error("Client é null");
-        // Algumas versões do wwebjs expõem puppeteerPage, útil para debug
-        
-        // 1. Verifica se o número é válido no WhatsApp
-        let finalChatId = chatId;
-        
-        // Tenta limpar o sufixo para garantir formato correto
-        if (!finalChatId.includes('@')) {
-             log(`[WhatsApp] ChatId inválido detectado: ${finalChatId}. Tentando corrigir.`);
-             throw new Error("ChatId mal formatado");
-        }
 
-        // Tenta obter o chat. Isso força o WWebJS a sincronizar internamente
-        try {
-            const chat = await client.getChatById(finalChatId);
-            log(`[WhatsApp] Chat encontrado: ${chat.name || 'Sem nome'} (${finalChatId})`);
-            
-            // Simula "digitando" para parecer mais humano e dar tempo de processamento
-            await chat.sendStateTyping();
-            await new Promise(r => setTimeout(r, 500)); // Pequeno delay
-            
-            const msg = await chat.sendMessage(content, options);
-            log(`[WhatsApp] Mensagem enviada com sucesso. ID: ${msg.id.id}`);
-            return msg;
-        } catch (chatError) {
-            log(`[WhatsApp] Erro ao obter objeto Chat ou enviar via Chat. Tentando envio direto via client.`, chatError);
-            
-            // Fallback: Envio direto
-            const msg = await client.sendMessage(finalChatId, content, options);
-            log(`[WhatsApp] Mensagem enviada via Fallback (client.sendMessage). ID: ${msg.id.id}`);
-            return msg;
-        }
+        // Tenta enviar diretamente. Em versões recentes, getChatById tem causado crash se o chat não estiver indexado.
+        // O sendMessage direto costuma ser mais seguro para chats não carregados.
+        const msg = await client.sendMessage(chatId, content, options);
+        log(`[WhatsApp] Mensagem enviada (Direct). ID: ${msg.id.id}`);
+        return msg;
 
     } catch (error) {
-        log(`[WhatsApp] FALHA CRÍTICA NO ENVIO para ${chatId}`, error);
+        log(`[WhatsApp] FALHA NO ENVIO para ${chatId}`, error);
+        
+        // Detecção específica do erro 'markedUnread'
+        if (error.message && error.message.includes('markedUnread')) {
+            log(`[WhatsApp CRITICAL] Erro de 'markedUnread' detectado. Isso indica sessão corrompida por atualização do WhatsApp. É necessário RESETAR a conexão.`);
+        }
+        
         throw error;
     }
 };
@@ -152,25 +118,16 @@ const getDb = (username) => {
         db.run(`CREATE TABLE IF NOT EXISTS user_settings (id INTEGER PRIMARY KEY CHECK (id = 1), settings TEXT)`);
         db.run(`CREATE TABLE IF NOT EXISTS scheduled_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, message TEXT, nextRun TEXT, recurrence TEXT, active INTEGER, type TEXT, channels TEXT, targetType TEXT, selectedCompanyIds TEXT, attachmentFilename TEXT, attachmentOriginalName TEXT, documentsPayload TEXT, createdBy TEXT)`);
         
+        // Migrations
         db.all("PRAGMA table_info(scheduled_messages)", [], (err, rows) => {
-            if (rows && rows.length > 0) {
-                const hasColumn = rows.some(col => col.name === 'documentsPayload');
-                if (!hasColumn) {
-                    db.run("ALTER TABLE scheduled_messages ADD COLUMN documentsPayload TEXT", (e) => { if(e) log("Migration documentsPayload failed", e); });
-                }
+            if (rows && !rows.some(col => col.name === 'documentsPayload')) {
+                db.run("ALTER TABLE scheduled_messages ADD COLUMN documentsPayload TEXT", () => {});
             }
         });
-
         db.all("PRAGMA table_info(tasks)", [], (err, rows) => {
-            if (rows && rows.length > 0) {
-                const hasColumn = rows.some(col => col.name === 'createdAt');
-                if (!hasColumn) {
-                    const today = new Date().toISOString().split('T')[0];
-                    db.run("ALTER TABLE tasks ADD COLUMN createdAt TEXT", (e) => { 
-                        if(e) log("Migration tasks.createdAt failed", e); 
-                        else db.run("UPDATE tasks SET createdAt = ?", [today]);
-                    });
-                }
+            if (rows && !rows.some(col => col.name === 'createdAt')) {
+                const today = new Date().toISOString().split('T')[0];
+                db.run("ALTER TABLE tasks ADD COLUMN createdAt TEXT", () => db.run("UPDATE tasks SET createdAt = ?", [today]));
             }
         });
     });
@@ -202,12 +159,11 @@ const getWaClientWrapper = (username) => {
         cleanPuppeteerLocks(sessionPath);
 
         const puppeteerExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser';
-        log(`[WhatsApp Init] Usando executável Chromium: ${puppeteerExecutablePath}`);
         
         const client = new Client({
             authStrategy: new LocalAuth({ clientId: username, dataPath: authPath }), 
             puppeteer: {
-                headless: true, // Tente 'new' se estiver usando Puppeteer muito recente, mas true é mais seguro em versoes mistas
+                headless: true,
                 executablePath: puppeteerExecutablePath,
                 args: [
                     '--no-sandbox', 
@@ -217,17 +173,16 @@ const getWaClientWrapper = (username) => {
                     '--no-first-run', 
                     '--no-zygote', 
                     '--disable-gpu',
-                    '--disable-software-rasterizer', // Adicionado para estabilidade gráfica
-                    '--single-process' // Necessário em alguns ambientes Alpine restritos
+                    '--disable-software-rasterizer',
+                    '--single-process'
                 ],
             }
         });
 
-        // Eventos de Diagnóstico
         client.on('qr', (qr) => { 
             log(`[WhatsApp Event] QR Code gerado para ${username}`);
             QRCode.toDataURL(qr, (err, url) => { 
-                if (err) log(`[WhatsApp Event] Erro ao gerar imagem QR`, err);
+                if (err) log(`[WhatsApp Event] Erro QR`, err);
                 waClients[username].qr = url; 
                 waClients[username].status = 'generating_qr';
             }); 
@@ -241,7 +196,7 @@ const getWaClientWrapper = (username) => {
         });
         
         client.on('authenticated', () => {
-            log(`[WhatsApp Event] Autenticado com sucesso (${username})`);
+            log(`[WhatsApp Event] Autenticado (${username})`);
         });
 
         client.on('auth_failure', (msg) => {
@@ -255,13 +210,8 @@ const getWaClientWrapper = (username) => {
             waClients[username].info = null;
         });
 
-        // Tentar capturar erros do navegador
-        client.on('change_state', state => {
-            log(`[WhatsApp Event] Mudança de estado: ${state}`);
-        });
-
         client.initialize().catch((err) => {
-            log(`[WhatsApp Init] ERRO FATAL ao inicializar cliente (${username})`, err);
+            log(`[WhatsApp Init] ERRO FATAL (${username})`, err);
             waClients[username].status = 'error';
         });
         
@@ -273,7 +223,6 @@ const getWaClientWrapper = (username) => {
 
 // --- LOGIC: Send Daily Summary Helper ---
 const sendDailySummaryToUser = async (user) => {
-    // ... Mantido igual, apenas substituindo console.log por log() se desejar debug profundo aqui ...
     const db = getDb(user);
     if (!db) return;
 
@@ -317,7 +266,7 @@ const sendDailySummaryToUser = async (user) => {
                     resolve({ success: true, message: 'Enviado com sucesso' });
                 } catch (sendErr) {
                     log(`[Summary] Erro envio`, sendErr);
-                    resolve({ success: false, message: 'Erro no envio do WhatsApp: ' + sendErr.message });
+                    resolve({ success: false, message: 'Erro no envio do WhatsApp' });
                 }
             });
         });
@@ -555,6 +504,47 @@ app.post('/api/whatsapp/disconnect', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); } 
 });
 
+// --- NEW ROUTE: HARD RESET ---
+app.post('/api/whatsapp/reset', async (req, res) => {
+    try {
+        const username = req.user;
+        log(`[WhatsApp Reset] Solicitado reset forçado para: ${username}`);
+        
+        // 1. Destruir cliente atual se existir
+        if (waClients[username] && waClients[username].client) {
+            try {
+                await waClients[username].client.destroy();
+                log(`[WhatsApp Reset] Cliente destruído.`);
+            } catch (e) {
+                log(`[WhatsApp Reset] Erro ao destruir cliente (ignorado): ${e.message}`);
+            }
+            delete waClients[username];
+        }
+
+        // 2. Apagar pasta de autenticação
+        const authPath = path.join(DATA_DIR, `whatsapp_auth_${username}`);
+        if (fs.existsSync(authPath)) {
+            try {
+                fs.rmSync(authPath, { recursive: true, force: true });
+                log(`[WhatsApp Reset] Pasta de autenticação removida: ${authPath}`);
+            } catch (e) {
+                log(`[WhatsApp Reset] Erro ao remover pasta: ${e.message}`);
+                return res.status(500).json({ error: "Falha ao limpar arquivos de sessão. Tente reiniciar o servidor." });
+            }
+        }
+
+        // 3. Reiniciar wrapper (vai gerar novo QR Code na próxima chamada de status)
+        getWaClientWrapper(username);
+
+        res.json({ success: true, message: "Sessão resetada. Aguarde o novo QR Code." });
+
+    } catch (e) {
+        log(`[WhatsApp Reset] Erro fatal: ${e.message}`);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+
 app.post('/api/send-documents', async (req, res) => {
     const { documents, subject, messageBody, channels, emailSignature, whatsappTemplate } = req.body;
     
@@ -601,8 +591,6 @@ app.post('/api/send-documents', async (req, res) => {
 
             const validAttachments = [];
             for (const doc of sortedDocs) {
-                // Se doc.serverFilename estiver vazio, significa que não tem anexo físico (ex: apenas comunicado), 
-                // então pulamos a validação de arquivo para esse item, mas permitimos o envio se for apenas texto.
                 if (doc.serverFilename) {
                     const filePath = path.join(UPLOADS_DIR, doc.serverFilename);
                     if (fs.existsSync(filePath)) {
@@ -619,10 +607,6 @@ app.post('/api/send-documents', async (req, res) => {
                 }
             }
 
-            // Se não tem anexos E não tem documentos listados para processar, pula.
-            // Mas se a intenção é mandar mensagem de texto (ex: aviso sem anexo), permitimos.
-            // A lógica atual depende de 'companyDocs' para marcar logs de envio.
-            
             if (channels.email && company.email) {
                 try {
                     const finalHtml = buildEmailHtml(messageBody, companyDocs, emailSignature);
@@ -672,7 +656,7 @@ app.post('/api/send-documents', async (req, res) => {
                     
                     mensagemCompleta += `\n\n${whatsappSignature}`;
 
-                    // --- USANDO O HELPER SEGURO COM LOGS ---
+                    // --- USANDO O HELPER SEGURO ---
                     await safeSendMessage(client, chatId, mensagemCompleta);
                     
                     for (const att of validAttachments) {
@@ -681,8 +665,6 @@ app.post('/api/send-documents', async (req, res) => {
                             const media = new MessageMedia(att.contentType, fileData, att.filename);
                             
                             await safeSendMessage(client, chatId, media);
-                            
-                            // Delay para evitar flood (anti-ban e estabilidade)
                             await new Promise(r => setTimeout(r, 3000));
                         } catch (mediaErr) {
                             log(`[WhatsApp] Erro envio mídia ${att.filename}`, mediaErr);
@@ -725,7 +707,7 @@ app.get(/.*/, (req, res) => {
     if (!req.path.startsWith('/api')) res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-// --- CRON JOB --- (Instrumentado com Logs)
+// --- CRON JOB ---
 setInterval(() => {
     const envUsers = (process.env.USERS || '').split(',');
     envUsers.forEach(user => {
@@ -734,7 +716,7 @@ setInterval(() => {
 
         const now = new Date();
         const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
-        const brazilTime = new Date(utc - (3600000 * 3)); // UTC - 3h
+        const brazilTime = new Date(utc - (3600000 * 3)); 
         const nowStr = brazilTime.toISOString().slice(0, 16); 
 
         db.all("SELECT * FROM scheduled_messages WHERE active = 1 AND nextRun <= ?", [nowStr], async (err, rows) => {
@@ -771,7 +753,6 @@ setInterval(() => {
                     }
 
                     for (const company of targetCompanies) {
-                        // ... (Lógica de anexo mantida igual ao original, apenas com log wrapper)
                         let attachmentsToSend = [];
                         let companySpecificDocs = [];
 
@@ -856,7 +837,6 @@ setInterval(() => {
                             } catch(e) { log(`[CRON] Erro zap ${company.name}`, e); }
                         }
                         
-                        // Atualiza logs se for documento
                         if (companySpecificDocs.length > 0) {
                             for (const doc of companySpecificDocs) {
                                 if (doc.category) {
@@ -868,7 +848,7 @@ setInterval(() => {
                                 }
                             }
                         }
-                    } // end company loop
+                    } 
 
                     if (msg.recurrence === 'unico') {
                         db.run("UPDATE scheduled_messages SET active = 0 WHERE id = ?", [msg.id]);
@@ -883,7 +863,7 @@ setInterval(() => {
                 } catch(e) {
                     log(`[CRON] Erro crítico processando msg ID ${msg.id}`, e);
                 }
-            } // end rows loop
+            } 
         });
     });
 }, 60000); 

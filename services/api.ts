@@ -1,4 +1,3 @@
-
 import { Company, Task, Document, UserSettings, ScheduledMessage } from '../types';
 
 const API_URL = '/api';
@@ -167,6 +166,11 @@ export const api = {
 
   disconnectWhatsApp: async (): Promise<void> => {
     const res = await fetch(`${API_URL}/whatsapp/disconnect`, { method: 'POST', headers: getAuthHeader() });
+    return handleResponse(res);
+  },
+
+  resetWhatsAppSession: async (): Promise<void> => {
+    const res = await fetch(`${API_URL}/whatsapp/reset`, { method: 'POST', headers: getAuthHeader() });
     return handleResponse(res);
   },
 
