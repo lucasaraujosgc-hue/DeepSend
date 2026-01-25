@@ -12,6 +12,7 @@ import fs from 'fs';
 import sqlite3 from 'sqlite3';
 import multer from 'multer';
 import nodemailer from 'nodemailer';
+import { GoogleGenAI, FunctionDeclaration, SchemaType } from "@google/genai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,6 +52,16 @@ const log = (message, error = null) => {
 log("Servidor iniciando...");
 log(`Diretório de dados: ${DATA_DIR}`);
 
+// --- AI CONFIGURATION ---
+// Inicializa apenas se a chave estiver presente
+let ai = null;
+if (process.env.GEMINI_API_KEY) {
+    ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    log("AI: Google GenAI inicializado.");
+} else {
+    log("AI: GEMINI_API_KEY não encontrada. O assistente inteligente estará desativado.");
+}
+
 // --- HELPER: Puppeteer Lock Cleaner ---
 const cleanPuppeteerLocks = (dir) => {
     const locks = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
@@ -83,49 +94,34 @@ const safeSendMessage = async (client, chatId, content, options = {}) => {
         if (!client) throw new Error("Client é null");
 
         // CORREÇÃO CRÍTICA (markedUnread error):
-        // Forçamos sendSeen: false para pular a etapa que está quebrada na versão atual do WhatsApp Web.
         const safeOptions = { 
             ...options, 
-            sendSeen: false // Evita o crash 'markedUnread'
+            sendSeen: false 
         };
 
-        // 1. Verifica se o número é válido no WhatsApp
         let finalChatId = chatId;
         
-        // Tenta limpar o sufixo para garantir formato correto
         if (!finalChatId.includes('@')) {
              throw new Error("ChatId mal formatado");
         }
 
-        // Tenta obter o chat. 
         try {
             const chat = await client.getChatById(finalChatId);
-            log(`[WhatsApp] Chat encontrado: ${chat.name || 'Sem nome'} (${finalChatId})`);
-            
-            // REMOVIDO: sendStateTyping também quebra quando o modelo interno muda.
-            // await chat.sendStateTyping();
-            // await new Promise(r => setTimeout(r, 500)); 
-            
             const msg = await chat.sendMessage(content, safeOptions);
             log(`[WhatsApp] Mensagem enviada com sucesso. ID: ${msg.id.id}`);
             return msg;
         } catch (chatError) {
             log(`[WhatsApp] Erro ao obter objeto Chat. Tentando envio direto (Fallback). Erro: ${chatError.message}`);
-            
-            // Fallback: Envio direto ignorando o objeto Chat
             const msg = await client.sendMessage(finalChatId, content, safeOptions);
-            log(`[WhatsApp] Mensagem enviada via Fallback (client.sendMessage). ID: ${msg.id.id}`);
+            log(`[WhatsApp] Mensagem enviada via Fallback. ID: ${msg.id.id}`);
             return msg;
         }
 
     } catch (error) {
         log(`[WhatsApp] FALHA CRÍTICA NO ENVIO para ${chatId}`, error);
-        
-        // Detecção específica do erro 'markedUnread'
         if (error.message && error.message.includes('markedUnread')) {
-            log(`[WhatsApp CRITICAL] Erro de 'markedUnread' detectado. A correção 'sendSeen: false' falhou ou o erro está em outra etapa.`);
+            log(`[WhatsApp CRITICAL] Erro de 'markedUnread' detectado.`);
         }
-        
         throw error;
     }
 };
@@ -148,6 +144,10 @@ const getDb = (username) => {
         db.run(`CREATE TABLE IF NOT EXISTS user_settings (id INTEGER PRIMARY KEY CHECK (id = 1), settings TEXT)`);
         db.run(`CREATE TABLE IF NOT EXISTS scheduled_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, message TEXT, nextRun TEXT, recurrence TEXT, active INTEGER, type TEXT, channels TEXT, targetType TEXT, selectedCompanyIds TEXT, attachmentFilename TEXT, attachmentOriginalName TEXT, documentsPayload TEXT, createdBy TEXT)`);
         
+        // RAG & Assistente Tables
+        db.run(`CREATE TABLE IF NOT EXISTS chat_history (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, timestamp TEXT)`);
+        db.run(`CREATE TABLE IF NOT EXISTS personal_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT, content TEXT, created_at TEXT, updated_at TEXT)`);
+
         // Migrations
         db.all("PRAGMA table_info(scheduled_messages)", [], (err, rows) => {
             if (rows && !rows.some(col => col.name === 'documentsPayload')) {
@@ -164,6 +164,236 @@ const getDb = (username) => {
 
     dbInstances[username] = db;
     return db;
+};
+
+// --- AI LOGIC: Tools & Handler ---
+
+// Definição das Ferramentas (Tools) para o Gemini
+const assistantTools = [
+    {
+        name: "manage_task",
+        description: "Cria, atualiza, deleta ou lista tarefas do Kanban.",
+        parameters: {
+            type: "OBJECT",
+            properties: {
+                action: { type: "STRING", enum: ["create", "list", "update", "delete"], description: "Ação a realizar." },
+                data: { 
+                    type: "OBJECT", 
+                    description: "Dados da tarefa. Para 'create', exige title. Para 'update'/'delete', exige id.",
+                    properties: {
+                        id: { type: "NUMBER" },
+                        title: { type: "STRING" },
+                        description: { type: "STRING" },
+                        priority: { type: "STRING", enum: ["alta", "media", "baixa"] },
+                        status: { type: "STRING", enum: ["pendente", "em_andamento", "concluida"] },
+                        dueDate: { type: "STRING", description: "Data formato YYYY-MM-DD" }
+                    }
+                }
+            },
+            required: ["action"]
+        }
+    },
+    {
+        name: "manage_company",
+        description: "Gerencia o cadastro de empresas (clientes).",
+        parameters: {
+            type: "OBJECT",
+            properties: {
+                action: { type: "STRING", enum: ["create", "list", "search", "delete"] },
+                data: {
+                    type: "OBJECT",
+                    properties: {
+                        id: { type: "NUMBER" },
+                        name: { type: "STRING" },
+                        docNumber: { type: "STRING" },
+                        whatsapp: { type: "STRING" }
+                    }
+                }
+            },
+            required: ["action"]
+        }
+    },
+    {
+        name: "manage_memory",
+        description: "Salva ou busca informações na memória pessoal (RAG). Use para estudos, treinos, notas, etc.",
+        parameters: {
+            type: "OBJECT",
+            properties: {
+                action: { type: "STRING", enum: ["save", "search", "list_topics"] },
+                topic: { type: "STRING", description: "Tópico principal (ex: 'ingles', 'treino_a', 'lembrete')" },
+                content: { type: "STRING", description: "Conteúdo a ser salvo ou termo de busca." }
+            },
+            required: ["action"]
+        }
+    },
+    {
+        name: "schedule_message",
+        description: "Agenda uma mensagem ou lembrete para ser enviado no futuro.",
+        parameters: {
+            type: "OBJECT",
+            properties: {
+                message: { type: "STRING" },
+                datetime: { type: "STRING", description: "Data e hora ISO 8601 ou YYYY-MM-DD HH:mm" },
+                recurrence: { type: "STRING", enum: ["unico", "mensal", "semanal"], description: "Padrão é unico." }
+            },
+            required: ["message", "datetime"]
+        }
+    }
+];
+
+// Execução das Tools
+const executeTool = async (name, args, db, username) => {
+    log(`[AI Tool] Executando ${name} com args: ${JSON.stringify(args)}`);
+    
+    if (name === "manage_task") {
+        if (args.action === "list") {
+            return new Promise((resolve, reject) => {
+                db.all("SELECT id, title, status, priority, dueDate FROM tasks WHERE status != 'concluida'", (err, rows) => {
+                    if (err) resolve("Erro ao listar: " + err.message);
+                    else resolve(JSON.stringify(rows));
+                });
+            });
+        }
+        if (args.action === "create") {
+            const t = args.data || {};
+            const today = new Date().toISOString().split('T')[0];
+            return new Promise(resolve => {
+                db.run(`INSERT INTO tasks (title, description, status, priority, color, dueDate, recurrence, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, 
+                [t.title, t.description || '', 'pendente', t.priority || 'media', '#45B7D1', t.dueDate || '', 'nenhuma', today], 
+                function(err) { resolve(err ? "Erro: " + err.message : `Tarefa criada com ID ${this.lastID}`); });
+            });
+        }
+        if (args.action === "update" && args.data?.id) {
+            // Simplificado para exemplo
+            const id = args.data.id;
+            const updates = [];
+            const values = [];
+            if(args.data.status) { updates.push("status=?"); values.push(args.data.status); }
+            if(args.data.title) { updates.push("title=?"); values.push(args.data.title); }
+            values.push(id);
+            if(updates.length === 0) return "Nada para atualizar.";
+            
+            return new Promise(resolve => {
+                db.run(`UPDATE tasks SET ${updates.join(', ')} WHERE id=?`, values, (err) => resolve(err ? "Erro" : "Atualizado."));
+            });
+        }
+        if (args.action === "delete" && args.data?.id) {
+            return new Promise(resolve => {
+                db.run("DELETE FROM tasks WHERE id=?", [args.data.id], (err) => resolve(err ? "Erro" : "Deletado."));
+            });
+        }
+    }
+
+    if (name === "manage_company") {
+        if (args.action === "list" || args.action === "search") {
+            const sql = args.data?.name 
+                ? "SELECT id, name, whatsapp FROM companies WHERE name LIKE ?" 
+                : "SELECT id, name, whatsapp FROM companies LIMIT 20";
+            const params = args.data?.name ? [`%${args.data.name}%`] : [];
+            return new Promise(resolve => {
+                db.all(sql, params, (err, rows) => resolve(err ? "Erro" : JSON.stringify(rows)));
+            });
+        }
+    }
+
+    if (name === "manage_memory") {
+        if (args.action === "save") {
+            const now = new Date().toISOString();
+            return new Promise(resolve => {
+                db.run("INSERT INTO personal_notes (topic, content, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                [args.topic, args.content, now, now], (err) => resolve(err ? "Erro ao salvar nota." : "Nota salva com sucesso."));
+            });
+        }
+        if (args.action === "search") {
+            return new Promise(resolve => {
+                const term = args.content || args.topic || "";
+                db.all("SELECT topic, content FROM personal_notes WHERE topic LIKE ? OR content LIKE ? ORDER BY updated_at DESC LIMIT 5",
+                [`%${term}%`, `%${term}%`], (err, rows) => resolve(JSON.stringify(rows.length ? rows : "Nenhuma nota encontrada.")));
+            });
+        }
+        if (args.action === "list_topics") {
+             return new Promise(resolve => db.all("SELECT DISTINCT topic FROM personal_notes", (e, r) => resolve(JSON.stringify(r))));
+        }
+    }
+
+    if (name === "schedule_message") {
+        return new Promise(resolve => {
+            db.run(`INSERT INTO scheduled_messages (title, message, nextRun, recurrence, active, type, channels, targetType, createdBy) VALUES (?, ?, ?, ?, 1, 'message', ?, 'selected', ?)`,
+            ["Lembrete IA", args.message, args.datetime, args.recurrence || 'unico', JSON.stringify({whatsapp: true, email: false}), username],
+            function(err) { resolve(err ? "Erro agendamento" : `Lembrete agendado ID ${this.lastID}`); });
+        });
+    }
+
+    return "Ferramenta desconhecida ou ação não suportada.";
+};
+
+// Processador Central de IA
+const processAI = async (username, userMessage, mediaPart = null) => {
+    const db = getDb(username);
+    if (!db || !ai) return "Sistema de IA indisponível.";
+
+    // 1. Recuperar contexto (últimas 10 mensagens)
+    const history = await new Promise(resolve => {
+        db.all("SELECT role, content FROM chat_history ORDER BY id DESC LIMIT 10", (err, rows) => {
+            resolve(rows ? rows.reverse().map(r => ({ role: r.role === 'user' ? 'user' : 'model', parts: [{ text: r.content }] })) : []);
+        });
+    });
+
+    // 2. Montar prompt com instrução de sistema
+    const systemInstruction = `Você é um assistente executivo estrito e eficiente chamado "Contábil Bot".
+    - O termo "mim", "eu" ou "meu" refere-se EXCLUSIVAMENTE ao número de telefone autorizado (o dono).
+    - Você tem acesso total via tools para ler/escrever no banco de dados. Use-as sempre que o usuário pedir algo que exija dados (listar tarefas, ver empresas, salvar notas).
+    - Não invente dados. Se não sabe, use uma tool para buscar ou pergunte.
+    - Se o usuário mandar áudio, ele já foi transcrito no texto da mensagem.
+    - Para estudos e treinos, use a tool 'manage_memory'.
+    - Seja conciso.`;
+
+    // 3. Montar mensagem atual (Multimodal)
+    const currentParts = [];
+    if (mediaPart) currentParts.push(mediaPart);
+    currentParts.push({ text: userMessage });
+
+    try {
+        const model = ai.getGenerativeModel({ 
+            model: "gemini-2.5-flash-latest", // Modelo rápido
+            systemInstruction: systemInstruction,
+            tools: [{ functionDeclarations: assistantTools }]
+        });
+
+        // Chat session (com histórico manual para controle)
+        const chat = model.startChat({ history: history });
+        
+        let response = await chat.sendMessage(currentParts);
+        let functionCalls = response.functionCalls();
+        let finalResponseText = "";
+
+        // Loop de Tool Calling (Agente)
+        while (functionCalls && functionCalls.length > 0) {
+            const call = functionCalls[0];
+            const result = await executeTool(call.name, call.args, db, username);
+            
+            // Envia resultado de volta ao modelo
+            response = await chat.sendMessage([{
+                functionResponse: {
+                    name: call.name,
+                    response: { result: result }
+                }
+            }]);
+            functionCalls = response.functionCalls();
+        }
+
+        finalResponseText = response.response.text();
+
+        // 4. Salvar histórico
+        db.run("INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)", ['user', userMessage, new Date().toISOString()]);
+        db.run("INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)", ['model', finalResponseText, new Date().toISOString()]);
+
+        return finalResponseText;
+
+    } catch (e) {
+        log("[AI Error]", e);
+        return "Desculpe, tive um erro interno ao processar sua solicitação.";
+    }
 };
 
 // --- MULTI-TENANCY: WhatsApp Management ---
@@ -206,6 +436,83 @@ const getWaClientWrapper = (username) => {
                     '--disable-software-rasterizer',
                     '--single-process'
                 ],
+            }
+        });
+
+        // --- INTERCEPTADOR DE MENSAGENS (IA) ---
+        client.on('message', async (msg) => {
+            try {
+                // 1. Obter número autorizado
+                const db = getDb(username);
+                const settings = await new Promise(resolve => {
+                    db.get("SELECT settings FROM user_settings WHERE id = 1", (e, r) => resolve(r ? JSON.parse(r.settings) : null));
+                });
+
+                if (!settings || !settings.dailySummaryNumber) return;
+
+                // Normalização de números para comparação
+                const authorizedNumber = settings.dailySummaryNumber.replace(/\D/g, '');
+                const senderNumber = msg.from.replace(/\D/g, '').replace('@c.us', '');
+                
+                // Comparação frouxa (contém) para lidar com prefixos de país variantes, mas estrita o suficiente
+                // Idealmente: verificar se senderNumber termina com authorizedNumber (sem ddd 55 as vezes)
+                // Vamos assumir formato completo BR: 55 + DDD + 9 + Num
+                if (!senderNumber.includes(authorizedNumber) && !authorizedNumber.includes(senderNumber)) {
+                    // Não é o chefe. Ignorar.
+                    return;
+                }
+
+                // Ignorar grupos e status
+                if (msg.from.includes('@g.us') || msg.isStatus) return;
+
+                log(`[AI Trigger] Mensagem do Chefe (${username}): ${msg.body}`);
+
+                // Processar Mídia
+                let mediaPart = null;
+                let textContent = msg.body;
+
+                if (msg.hasMedia) {
+                    try {
+                        const media = await msg.downloadMedia();
+                        if (media) {
+                            if (media.mimetype.startsWith('image/')) {
+                                mediaPart = {
+                                    inlineData: {
+                                        mimeType: media.mimetype,
+                                        data: media.data
+                                    }
+                                };
+                                textContent += " [Imagem anexada]";
+                            } else if (media.mimetype.startsWith('audio/')) {
+                                // Para áudio, o ideal seria Speech-to-Text. 
+                                // O Gemini Multimodal aceita áudio nativo em alguns modelos (Flash 2.5 Audio preview).
+                                // Vamos tentar enviar o blob de audio se for suportado ou avisar.
+                                // Como fallback simples: marcamos que é audio.
+                                // Se for 'gemini-1.5-flash', ele aceita audio.
+                                mediaPart = {
+                                    inlineData: {
+                                        mimeType: media.mimetype, // ex: audio/ogg
+                                        data: media.data
+                                    }
+                                };
+                                textContent = "Por favor, ouça este áudio e execute o que for pedido. " + (msg.body || "");
+                            }
+                        }
+                    } catch (mediaErr) {
+                        log("Erro download media", mediaErr);
+                    }
+                }
+
+                // Simular 'digitando'
+                const chat = await msg.getChat();
+                // chat.sendStateTyping(); // Desativado temporariamente devido a bug do wwebjs
+
+                const response = await processAI(username, textContent, mediaPart);
+                
+                await safeSendMessage(client, msg.from, response);
+
+            } catch (e) {
+                log("Erro no handler de mensagem IA", e);
             }
         });
 
