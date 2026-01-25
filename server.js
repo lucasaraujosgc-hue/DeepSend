@@ -12,7 +12,7 @@ import fs from 'fs';
 import sqlite3 from 'sqlite3';
 import multer from 'multer';
 import nodemailer from 'nodemailer';
-import { GoogleGenAI, FunctionDeclaration, SchemaType } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
