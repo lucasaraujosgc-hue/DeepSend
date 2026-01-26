@@ -376,7 +376,7 @@ const processAI = async (username, userMessage, mediaPart = null) => {
     try {
         // --- ATUALIZAÇÃO PARA O SDK @google/genai ---
         const chat = ai.chats.create({ 
-            model: "gemini-2.5-flash-latest",
+            model: "gemini-2.0-flash-exp",
             config: {
                 systemInstruction: systemInstruction,
                 tools: [{ functionDeclarations: assistantTools }]
