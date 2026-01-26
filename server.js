@@ -1072,7 +1072,7 @@ app.get(/.*/, (req, res) => {
     if (!req.path.startsWith('/api')) res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-// --- CRON JOB ---
+// --- CRON JOBo ---
 setInterval(() => {
     const envUsers = (process.env.USERS || '').split(',');
     envUsers.forEach(user => {
