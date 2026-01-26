@@ -174,81 +174,233 @@ const getDb = (username) => {
     return db;
 };
 
-// --- AI LOGIC: Tools & Handler (Reformulada) ---
+// --- EMAIL CONFIGURATION ---
+const emailPort = parseInt(process.env.EMAIL_PORT || '465');
+const emailTransporter = nodemailer.createTransport({
+    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+    port: emailPort,
+    secure: emailPort === 465,
+    auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+});
+
+// --- AI LOGIC: Tools & Handler ---
 
 const assistantTools = [
     {
         name: "consult_tasks",
-        description: "Consulta suas tarefas existentes. Use para saber o que tem pendente.",
+        description: "Lista as tarefas cadastradas.",
         parameters: {
             type: Type.OBJECT,
             properties: {
-                status: { type: Type.STRING, enum: ["pendente", "em_andamento", "concluida"], description: "Filtrar por status. Padrão: pendente" },
-                limit: { type: Type.INTEGER, description: "Máximo de tarefas. Padrão 5." }
+                status: { type: Type.STRING, enum: ["pendente", "em_andamento", "concluida", "todas"], description: "Filtro. Use 'todas' se o usuario pedir 'todas'." }
             }
         }
     },
     {
+        name: "update_task_status",
+        description: "Marca uma tarefa como concluída ou muda status.",
+        parameters: {
+            type: Type.OBJECT,
+            properties: {
+                task_id_or_title: { type: Type.STRING, description: "ID numérico ou Título aproximado da tarefa." },
+                new_status: { type: Type.STRING, enum: ["pendente", "em_andamento", "concluida"], description: "Novo status." }
+            },
+            required: ["task_id_or_title", "new_status"]
+        }
+    },
+    {
         name: "add_task",
-        description: "Adiciona uma nova tarefa rápida ao sistema.",
+        description: "Cria uma nova tarefa.",
         parameters: {
             type: Type.OBJECT,
             properties: {
                 title: { type: Type.STRING, description: "Título da tarefa" },
-                description: { type: Type.STRING, description: "Detalhes da tarefa" },
+                description: { type: Type.STRING },
                 priority: { type: Type.STRING, enum: ["alta", "media", "baixa"] }
             },
             required: ["title"]
         }
     },
     {
-        name: "search_company",
-        description: "Consulta dados de uma empresa cadastrada (Nome, CNPJ, Email, Zap).",
+        name: "set_personal_reminder",
+        description: "Define um lembrete pessoal para o usuário. Use para 'me lembre de X em Y minutos' ou 'todo dia X'.",
         parameters: {
             type: Type.OBJECT,
             properties: {
-                name_or_doc: { type: Type.STRING, description: "Nome ou parte do CNPJ/CPF para buscar." }
+                message: { type: Type.STRING, description: "O que deve ser lembrado." },
+                datetime: { type: Type.STRING, description: "Data e hora exata ISO 8601 (ex: 2024-05-10T14:30:00). Calcule baseando-se na hora atual informada no system prompt." },
+                recurrence: { type: Type.STRING, enum: ["unico", "diaria", "semanal", "mensal", "anual"], description: "Padrão: unico." }
+            },
+            required: ["message", "datetime"]
+        }
+    },
+    {
+        name: "send_message_to_company",
+        description: "ENVIA uma mensagem REAL (Email e/ou WhatsApp) para uma empresa cadastrada.",
+        parameters: {
+            type: Type.OBJECT,
+            properties: {
+                company_name_search: { type: Type.STRING, description: "Nome aproximado da empresa para buscar." },
+                message_body: { type: Type.STRING, description: "Conteúdo da mensagem a ser enviada." },
+                channels: { 
+                    type: Type.OBJECT, 
+                    properties: {
+                        whatsapp: { type: Type.BOOLEAN },
+                        email: { type: Type.BOOLEAN }
+                    }
+                }
+            },
+            required: ["company_name_search", "message_body"]
+        }
+    },
+    {
+        name: "search_company",
+        description: "Consulta dados de leitura de uma empresa.",
+        parameters: {
+            type: Type.OBJECT,
+            properties: {
+                name_or_doc: { type: Type.STRING }
             },
             required: ["name_or_doc"]
         }
     },
     {
         name: "manage_memory",
-        description: "SISTEMA DE MEMÓRIA PESSOAL. Use para SALVAR conhecimentos gerados (treinos, estudos, receitas) ou BUSCAR informações passadas que não sejam tarefas/empresas.",
+        description: "Salva/Busca informações gerais (treinos, estudos).",
         parameters: {
             type: Type.OBJECT,
             properties: {
-                action: { type: Type.STRING, enum: ["save", "search"], description: "Use 'save' para guardar algo novo útil. Use 'search' para lembrar de algo." },
-                topic: { type: Type.STRING, description: "Tópico chave (ex: 'treino_a', 'dieta', 'resumo_ingles')" },
-                content: { type: Type.STRING, description: "O conteúdo COMPLETO a ser salvo ou o termo de busca." }
+                action: { type: Type.STRING, enum: ["save", "search"] },
+                topic: { type: Type.STRING },
+                content: { type: Type.STRING }
             },
             required: ["action", "topic"]
         }
     }
 ];
 
-// Execução das Tools
+// --- EXECUÇÃO DAS TOOLS ---
 const executeTool = async (name, args, db, username) => {
     log(`[AI Tool] Executando ${name} com args: ${JSON.stringify(args)}`);
     
+    // 1. Consultar Tarefas (Sem Limite Rígido se pedir todas)
     if (name === "consult_tasks") {
         return new Promise((resolve) => {
-            const status = args.status || 'pendente';
-            const limit = args.limit || 5;
-            db.all("SELECT id, title, priority, dueDate FROM tasks WHERE status = ? ORDER BY id DESC LIMIT ?", [status, limit], (err, rows) => {
+            let sql = "SELECT id, title, priority, status, dueDate FROM tasks";
+            const params = [];
+            
+            if (args.status && args.status !== 'todas') {
+                sql += " WHERE status = ?";
+                params.push(args.status);
+            } else {
+                sql += " ORDER BY CASE WHEN status = 'pendente' THEN 1 WHEN status = 'em_andamento' THEN 2 ELSE 3 END, id DESC";
+            }
+            
+            db.all(sql, params, (err, rows) => {
                 if (err) resolve("Erro ao listar: " + err.message);
-                if (!rows || rows.length === 0) resolve("Nenhuma tarefa encontrada com este status.");
+                if (!rows || rows.length === 0) resolve("Nenhuma tarefa encontrada.");
                 else resolve(JSON.stringify(rows));
             });
         });
     }
 
+    // 2. Atualizar Status (Marcar como Concluída)
+    if (name === "update_task_status") {
+        return new Promise((resolve) => {
+            // Tenta achar por ID se for numérico, senão por título
+            const isId = /^\d+$/.test(args.task_id_or_title);
+            const sqlCheck = isId ? "SELECT id FROM tasks WHERE id = ?" : "SELECT id FROM tasks WHERE title LIKE ?";
+            const paramCheck = isId ? args.task_id_or_title : `%${args.task_id_or_title}%`;
+
+            db.all(sqlCheck, [paramCheck], (err, rows) => {
+                if (err || !rows || rows.length === 0) {
+                    resolve(`Tarefa "${args.task_id_or_title}" não encontrada.`);
+                    return;
+                }
+                
+                const ids = rows.map(r => r.id);
+                const placeholders = ids.map(() => '?').join(',');
+                
+                db.run(`UPDATE tasks SET status = ? WHERE id IN (${placeholders})`, [args.new_status, ...ids], function(err2) {
+                    if (err2) resolve("Erro ao atualizar.");
+                    else resolve(`Atualizado ${this.changes} tarefa(s) para '${args.new_status}'.`);
+                });
+            });
+        });
+    }
+
+    // 3. Adicionar Tarefa
     if (name === "add_task") {
         const today = new Date().toISOString().split('T')[0];
         return new Promise(resolve => {
             db.run(`INSERT INTO tasks (title, description, status, priority, color, recurrence, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`, 
             [args.title, args.description || '', 'pendente', args.priority || 'media', '#45B7D1', 'nenhuma', today], 
             function(err) { resolve(err ? "Erro: " + err.message : `Tarefa criada (ID ${this.lastID}).`); });
+        });
+    }
+
+    // 4. Lembrete Pessoal (Agendamento no Cron)
+    if (name === "set_personal_reminder") {
+        return new Promise(resolve => {
+            db.run(`INSERT INTO scheduled_messages (title, message, nextRun, recurrence, active, type, channels, targetType, createdBy) VALUES (?, ?, ?, ?, 1, 'message', ?, 'personal', ?)`,
+            ["Lembrete Pessoal", args.message, args.datetime, args.recurrence || 'unico', JSON.stringify({whatsapp: true, email: false}), username],
+            function(err) { 
+                resolve(err ? "Erro ao agendar lembrete: " + err.message : `Lembrete agendado para ${args.datetime}. O sistema enviará automaticamente.`); 
+            });
+        });
+    }
+
+    // 5. Enviar Mensagem para Empresa (Disparo Real)
+    if (name === "send_message_to_company") {
+        return new Promise(async (resolve) => {
+            // A. Buscar a empresa
+            db.all("SELECT * FROM companies WHERE name LIKE ? LIMIT 5", [`%${args.company_name_search}%`], async (err, rows) => {
+                if (err) { resolve("Erro no banco de dados."); return; }
+                if (!rows || rows.length === 0) { resolve(`Empresa com nome similar a "${args.company_name_search}" não encontrada.`); return; }
+                if (rows.length > 1) { 
+                    const names = rows.map(r => r.name).join(", ");
+                    resolve(`Encontrei várias empresas: ${names}. Seja mais específico no nome.`); 
+                    return; 
+                }
+
+                const company = rows[0];
+                const channels = args.channels || { whatsapp: true, email: true };
+                let logMsg = [];
+
+                // B. Enviar Email
+                if (channels.email && company.email) {
+                    try {
+                        const emailList = company.email.split(',').map(e => e.trim());
+                        await emailTransporter.sendMail({
+                            from: process.env.EMAIL_USER,
+                            to: emailList[0],
+                            cc: emailList.slice(1),
+                            subject: "Comunicado Contabilidade",
+                            text: args.message_body, // Fallback text
+                            html: buildEmailHtml(args.message_body, [], "Atenciosamente,\nContabilidade")
+                        });
+                        logMsg.push("E-mail enviado");
+                    } catch (e) { logMsg.push("Falha no E-mail"); }
+                }
+
+                // C. Enviar WhatsApp
+                if (channels.whatsapp && company.whatsapp) {
+                    const waWrapper = getWaClientWrapper(username);
+                    if (waWrapper && waWrapper.status === 'connected') {
+                        try {
+                            let number = company.whatsapp.replace(/\D/g, '');
+                            if (!number.startsWith('55')) number = '55' + number;
+                            const chatId = `${number}@c.us`;
+                            await safeSendMessage(waWrapper.client, chatId, args.message_body);
+                            logMsg.push("WhatsApp enviado");
+                        } catch (e) { logMsg.push("Falha no WhatsApp"); }
+                    } else {
+                        logMsg.push("WhatsApp desconectado");
+                    }
+                }
+
+                resolve(`Ação executada para ${company.name}: ${logMsg.join(", ")}.`);
+            });
         });
     }
 
@@ -266,24 +418,15 @@ const executeTool = async (name, args, db, username) => {
         if (args.action === "save") {
             const now = new Date().toISOString();
             return new Promise(resolve => {
-                // Remove duplicatas exatas do mesmo tópico recente para economizar espaço
                 db.run("INSERT INTO personal_notes (topic, content, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                [args.topic, args.content, now, now], (err) => resolve(err ? "Erro ao salvar memória." : "Informação salva na memória permanente com sucesso!"));
+                [args.topic, args.content, now, now], (err) => resolve(err ? "Erro." : "Memória salva."));
             });
         }
         if (args.action === "search") {
             return new Promise(resolve => {
                 const term = args.content || args.topic || "";
-                db.all("SELECT topic, content, created_at FROM personal_notes WHERE topic LIKE ? OR content LIKE ? ORDER BY created_at DESC LIMIT 3",
-                [`%${term}%`, `%${term}%`], (err, rows) => {
-                    if (rows && rows.length > 0) {
-                        // Formata para o LLM entender melhor
-                        const context = rows.map(r => `[Tópico: ${r.topic} | Data: ${r.created_at}]\n${r.content}`).join("\n---\n");
-                        resolve(context);
-                    } else {
-                        resolve("Nada encontrado na memória sobre isso.");
-                    }
-                });
+                db.all("SELECT topic, content FROM personal_notes WHERE topic LIKE ? OR content LIKE ? LIMIT 3",
+                [`%${term}%`, `%${term}%`], (err, rows) => resolve(JSON.stringify(rows)));
             });
         }
     }
@@ -306,7 +449,7 @@ const runWithRetry = async (fn, retries = 3, delay = 2000) => {
     }
 };
 
-// Processador Central de IA
+// --- AI PROCESSOR ---
 const processAI = async (username, userMessage, mediaPart = null) => {
     const db = getDb(username);
     if (!db || !ai) return "Sistema de IA indisponível.";
@@ -314,40 +457,36 @@ const processAI = async (username, userMessage, mediaPart = null) => {
     // OTIMIZAÇÃO: Zero Token para "Oi"
     const greetingRegex = /^(oi|ola|olá|bom dia|boa tarde|boa noite|opa|eai|tudo bem|ajuda)\??$/i;
     if (!mediaPart && greetingRegex.test(userMessage.trim())) {
-        return "Olá! Sou seu assistente. Posso consultar empresas, anotar tarefas ou acessar sua memória pessoal (treinos, estudos). Como ajudo?";
+        return "Olá! Sou seu assistente. Posso consultar empresas, anotar tarefas, enviar mensagens e lembrar você de coisas. Como ajudo?";
     }
 
-    // 2. Recuperar contexto (MUITO CURTO para economizar - Apenas 4 últimas)
     const history = await new Promise(resolve => {
-        db.all("SELECT role, content FROM chat_history ORDER BY id DESC LIMIT 4", (err, rows) => {
+        db.all("SELECT role, content FROM chat_history ORDER BY id DESC LIMIT 6", (err, rows) => {
             resolve(rows ? rows.reverse().map(r => ({ role: r.role === 'user' ? 'user' : 'model', parts: [{ text: r.content }] })) : []);
         });
     });
 
-    // 3. System Instruction OTIMIZADA PARA RAG E ECONOMIA
-    const systemInstruction = `Você é um assistente pessoal inteligente e eficiente.
-    
-    SEUS OBJETIVOS:
-    1. **Dados Empresariais (Read-Only/Light Write):** 
-       - Use 'search_company' para consultar dados de clientes. Não invente dados.
-       - Use 'consult_tasks' ou 'add_task' para gerenciar afazeres do dia a dia.
-    
-    2. **Memória Pessoal (RAG - CRÍTICO):**
-       - Se o usuário pedir para CRIAR algo duradouro (ex: "Monte um treino", "Lista de estudos", "Receita"), você DEVE:
-         a) Gerar o conteúdo.
-         b) AUTOMATICAMENTE chamar a tool 'manage_memory' (action='save') para salvar esse conteúdo gerado.
-       - Se o usuário perguntar algo pessoal do passado (ex: "Qual meu treino?", "O que estou estudando?"), use 'manage_memory' (action='search') PRIMEIRO antes de responder.
+    // INSERÇÃO DA DATA/HORA ATUAL PARA CÁLCULOS RELATIVOS
+    const now = new Date();
+    const currentTimeStr = now.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    const currentISO = now.toISOString();
 
-    3. **Economia de Tokens:**
-       - Seja direto. Não repita a pergunta do usuário.
-       - Se não encontrar dados no banco, diga apenas "Não encontrei".`;
+    const systemInstruction = `Você é o "Contábil Bot", um assistente eficiente.
+    DATA/HORA ATUAL: ${currentTimeStr} (ISO: ${currentISO}).
+    Use essa data para calcular vencimentos ou agendamentos relativos (ex: "daqui a 20 min" = somar 20 min ao ISO).
+
+    REGRAS DE OURO:
+    1. **Tarefas:** Se o usuário pedir "todas" as tarefas, use 'consult_tasks' com status='todas'. Se pedir para marcar como feita/concluída, use 'update_task_status'.
+    2. **Mensagens para Clientes:** Se o usuário pedir para ENVIAR/MANDAR mensagem para uma empresa, NÃO apenas sugira o texto. Use a tool 'send_message_to_company' para executar o envio real.
+    3. **Lembretes Pessoais:** Se o usuário disser "me lembre de X" ou "lembrete de beber água", use 'set_personal_reminder'. Calcule o 'datetime' correto somando o tempo à hora atual.
+    4. **Memória:** Use 'manage_memory' para guardar informações duradouras (treinos, ideias) ou buscar informações passadas.
+    5. **Saída:** Se você usou uma tool de envio (send_message...), responda apenas confirmando o envio, sem repetir o texto da mensagem. Evite negrito duplo (** **).`;
 
     const currentParts = [];
     if (mediaPart) currentParts.push(mediaPart);
     if (userMessage) currentParts.push({ text: userMessage });
 
     try {
-        // USANDO MODELO MAIS RECENTE CONFORME SOLICITADO
         const chat = ai.chats.create({ 
             model: "gemini-3-flash-preview", 
             config: {
@@ -357,46 +496,30 @@ const processAI = async (username, userMessage, mediaPart = null) => {
             history: history
         });
 
-        let response = await runWithRetry(() => chat.sendMessage({
-            message: currentParts
-        }));
-
+        let response = await runWithRetry(() => chat.sendMessage({ message: currentParts }));
         let functionCalls = response.functionCalls;
         let loopCount = 0;
 
-        // Loop de execução de Tools
         while (functionCalls && functionCalls.length > 0 && loopCount < 5) {
             loopCount++;
             const call = functionCalls[0];
-            
-            // Feedback visual no log
-            log(`[AI Thinking] Chamando ferramenta: ${call.name}`);
-
             const result = await executeTool(call.name, call.args, db, username);
-            
             response = await runWithRetry(() => chat.sendMessage({
-                message: [{
-                    functionResponse: {
-                        name: call.name,
-                        response: { result: result }
-                    }
-                }]
+                message: [{ functionResponse: { name: call.name, response: { result: result } } }]
             }));
             functionCalls = response.functionCalls;
         }
 
-        const finalResponseText = response.text || "Feito.";
-
-        // Salvar histórico curto
+        const finalText = response.text || "Comando processado.";
         db.run("INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)", ['user', userMessage, new Date().toISOString()]);
-        db.run("INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)", ['model', finalResponseText, new Date().toISOString()]);
+        db.run("INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)", ['model', finalText, new Date().toISOString()]);
 
-        return finalResponseText;
+        return finalText;
 
     } catch (e) {
         log("[AI Error]", e);
         if (e.message?.includes('404')) return "Erro: O modelo gemini-3-flash-preview ainda não está disponível na sua região ou chave. Tente reverter para gemini-2.0-flash.";
-        return "Tive um problema momentâneo. Tente novamente.";
+        return "Desculpe, tive um problema momentâneo.";
     }
 };
 
@@ -459,7 +582,6 @@ const getWaClientWrapper = (username) => {
                 });
 
                 if (!settings || !settings.dailySummaryNumber) {
-                    log(`[WhatsApp Auth] FALHA: Configuração 'dailySummaryNumber' não encontrada.`);
                     return;
                 }
 
@@ -467,7 +589,6 @@ const getWaClientWrapper = (username) => {
                 const senderNumber = msg.from.replace('@c.us', '').replace(/\D/g, '');
 
                 if (!senderNumber.endsWith(authorizedNumber)) {
-                    log(`[WhatsApp Auth] BLOQUEADO: Número ${senderNumber} não é autorizado.`);
                     return; 
                 }
 
@@ -622,19 +743,7 @@ const storage = multer.diskStorage({
 })
 const upload = multer({ storage: storage });
 
-const emailPort = parseInt(process.env.EMAIL_PORT || '465');
-const emailTransporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-    port: emailPort,
-    secure: emailPort === 465,
-    auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
-});
-
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.static(path.join(__dirname, 'dist')));
-
-// --- HTML Builder Helper --- (Mantido igual)
+// --- HTML Builder Helper ---
 const buildEmailHtml = (messageBody, documents, emailSignature) => {
     let docsTable = '';
     if (documents && documents.length > 0) {
@@ -1035,7 +1144,7 @@ app.get(/.*/, (req, res) => {
     if (!req.path.startsWith('/api')) res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-// --- CRON JOB ---
+// --- CRON JOB (Atualizado para Lembretes Pessoais) ---
 setInterval(() => {
     const envUsers = (process.env.USERS || '').split(',');
     envUsers.forEach(user => {
@@ -1050,7 +1159,7 @@ setInterval(() => {
         db.all("SELECT * FROM scheduled_messages WHERE active = 1 AND nextRun <= ?", [nowStr], async (err, rows) => {
             if (err || !rows || rows.length === 0) return;
 
-            log(`[CRON ${user}] Processando ${rows.length} agendamentos... Hora Server(BRT): ${nowStr}`);
+            log(`[CRON ${user}] Executando ${rows.length} tarefas. Hora: ${nowStr}`);
             
             const waWrapper = getWaClientWrapper(user);
             const clientReady = waWrapper.status === 'connected';
@@ -1061,130 +1170,146 @@ setInterval(() => {
 
             for (const msg of rows) {
                 try {
-                    const channels = JSON.parse(msg.channels || '{}');
-                    const selectedIds = JSON.parse(msg.selectedCompanyIds || '[]');
-                    
-                    let targetCompanies = [];
-                    if (msg.targetType === 'selected') {
-                       if (selectedIds.length > 0) {
-                            const placeholders = selectedIds.map(() => '?').join(',');
-                            targetCompanies = await new Promise(resolve => db.all(`SELECT * FROM companies WHERE id IN (${placeholders})`, selectedIds, (e, r) => resolve(r || [])));
-                       }
-                    } else {
-                        const operator = msg.targetType === 'mei' ? '=' : '!=';
-                        targetCompanies = await new Promise(resolve => db.all(`SELECT * FROM companies WHERE type ${operator} 'MEI'`, (e, r) => resolve(r || [])));
-                    }
-                    
-                    let specificDocs = [];
-                    if (msg.documentsPayload) {
-                        try { specificDocs = JSON.parse(msg.documentsPayload); } catch(e) { log('[CRON] Erro parse docs payload', e); }
-                    }
-
-                    for (const company of targetCompanies) {
-                        let attachmentsToSend = [];
-                        let companySpecificDocs = [];
-
-                        if (specificDocs.length > 0) {
-                            companySpecificDocs = specificDocs.filter(d => d.companyId === company.id);
-                            if (companySpecificDocs.length === 0) continue;
+                    // --- CASO 1: LEMBRETE PESSOAL (Novo) ---
+                    if (msg.targetType === 'personal') {
+                        if (clientReady && settings?.dailySummaryNumber) {
+                            let number = settings.dailySummaryNumber.replace(/\D/g, '');
+                            if (!number.startsWith('55')) number = '55' + number;
+                            const chatId = `${number}@c.us`;
                             
-                            for (const doc of companySpecificDocs) {
-                                 if (doc.serverFilename) {
-                                     const p = path.join(UPLOADS_DIR, doc.serverFilename);
-                                     if (fs.existsSync(p)) {
-                                         attachmentsToSend.push({ filename: doc.docName, path: p, contentType: 'application/pdf', docData: doc });
-                                     }
-                                 }
-                            }
-                        } else if (msg.attachmentFilename) {
-                            const p = path.join(UPLOADS_DIR, msg.attachmentFilename);
-                            if (fs.existsSync(p)) {
-                                attachmentsToSend.push({ filename: msg.attachmentOriginalName, path: p, contentType: 'application/pdf' });
-                            }
-                        }
-
-                        if (channels.email && company.email) {
-                           try {
-                                const htmlContent = specificDocs.length > 0 
-                                ? buildEmailHtml(msg.message, companySpecificDocs, settings?.emailSignature)
-                                : buildEmailHtml(msg.message, [], settings?.emailSignature);
-
-                                const emailList = company.email.split(',').map(e => e.trim()).filter(e => e);
-                                const mainEmail = emailList[0];
-                                const ccEmails = emailList.slice(1).join(', ');
-
-                                if (mainEmail) {
-                                    const senderName = process.env.EMAIL_FROM_NAME || 'Contabilidade';
-                                    const senderEmail = process.env.EMAIL_FROM_EMAIL || process.env.EMAIL_USER;
-                                    const fromAddress = `"${senderName}" <${senderEmail}>`;
-
-                                    await emailTransporter.sendMail({
-                                        from: fromAddress,
-                                        to: mainEmail,
-                                        cc: ccEmails,
-                                        subject: msg.title,
-                                        html: htmlContent,
-                                        attachments: attachmentsToSend.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
-                                    });
-                                }
-                           } catch(e) { log(`[CRON] Erro email ${company.name}`, e); }
-                        }
-
-                        if (channels.whatsapp && company.whatsapp && clientReady) {
-                            try {
-                                let number = company.whatsapp.replace(/\D/g, '');
-                                if (!number.startsWith('55')) number = '55' + number;
-                                const chatId = `${number}@c.us`;
-                                
-                                let waBody = `*${msg.title}*\n\n${msg.message}`;
-
-                                if (specificDocs.length > 0) {
-                                    waBody = `*📄 Olá!* \n\n${msg.message}\n\n*Arquivos enviados:*`;
-                                    const listaArquivos = attachmentsToSend.map(att => 
-                                        `• ${att.docData?.docName || att.filename} (${att.docData?.category || 'Anexo'}, Venc: ${att.docData?.dueDate || 'N/A'})`
-                                    ).join('\n');
-                                    waBody += `\n${listaArquivos}`;
-                                } else if (attachmentsToSend.length > 0) {
-                                    waBody += `\n\n*Arquivo enviado:* ${attachmentsToSend[0].filename}`;
-                                }
-                                
-                                waBody += `\n\n${settings?.whatsappTemplate || ''}`;
-
-                                await safeSendMessage(waWrapper.client, chatId, waBody);
-                                
-                                for (const att of attachmentsToSend) {
-                                    try {
-                                        const fileData = fs.readFileSync(att.path).toString('base64');
-                                        const media = new MessageMedia(att.contentType, fileData, att.filename);
-                                        await safeSendMessage(waWrapper.client, chatId, media);
-                                        await new Promise(r => setTimeout(r, 3000));
-                                    } catch (err) {
-                                        log(`[CRON] Erro media zap ${att.filename}`, err);
-                                    }
-                                }
-                            } catch(e) { log(`[CRON] Erro zap ${company.name}`, e); }
-                        }
-                        
-                        if (companySpecificDocs.length > 0) {
-                            for (const doc of companySpecificDocs) {
-                                if (doc.category) {
-                                    db.run(`INSERT INTO sent_logs (companyName, docName, category, sentAt, channels, status) VALUES (?, ?, ?, datetime('now', 'localtime'), ?, 'success')`, 
-                                        [company.name, doc.docName, doc.category, JSON.stringify(channels)]);
-                                    
-                                    db.run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, 'sent') ON CONFLICT(companyId, category, competence) DO UPDATE SET status='sent'`, 
-                                        [doc.companyId, doc.category, doc.competence]);
-                                }
-                            }
+                            await safeSendMessage(waWrapper.client, chatId, `⏰ *Lembrete:* ${msg.message}`);
+                            log(`[CRON] Lembrete pessoal enviado para ${user}`);
                         }
                     } 
+                    // --- CASO 2: MENSAGEM PARA EMPRESAS (Existente) ---
+                    else {
+                        const channels = JSON.parse(msg.channels || '{}');
+                        const selectedIds = JSON.parse(msg.selectedCompanyIds || '[]');
+                        
+                        let targetCompanies = [];
+                        if (msg.targetType === 'selected' && selectedIds.length > 0) {
+                            const placeholders = selectedIds.map(() => '?').join(',');
+                            targetCompanies = await new Promise(resolve => db.all(`SELECT * FROM companies WHERE id IN (${placeholders})`, selectedIds, (e, r) => resolve(r || [])));
+                        } else if (msg.targetType !== 'selected') {
+                            const operator = msg.targetType === 'mei' ? '=' : '!=';
+                            targetCompanies = await new Promise(resolve => db.all(`SELECT * FROM companies WHERE type ${operator} 'MEI'`, (e, r) => resolve(r || [])));
+                        }
+                        
+                        let specificDocs = [];
+                        if (msg.documentsPayload) {
+                            try { specificDocs = JSON.parse(msg.documentsPayload); } catch(e) { log('[CRON] Erro parse docs payload', e); }
+                        }
 
+                        for (const company of targetCompanies) {
+                            let attachmentsToSend = [];
+                            let companySpecificDocs = [];
+
+                            if (specificDocs.length > 0) {
+                                companySpecificDocs = specificDocs.filter(d => d.companyId === company.id);
+                                if (companySpecificDocs.length === 0) continue;
+                                
+                                for (const doc of companySpecificDocs) {
+                                     if (doc.serverFilename) {
+                                         const p = path.join(UPLOADS_DIR, doc.serverFilename);
+                                         if (fs.existsSync(p)) {
+                                             attachmentsToSend.push({ filename: doc.docName, path: p, contentType: 'application/pdf', docData: doc });
+                                         }
+                                     }
+                                }
+                            } else if (msg.attachmentFilename) {
+                                const p = path.join(UPLOADS_DIR, msg.attachmentFilename);
+                                if (fs.existsSync(p)) {
+                                    attachmentsToSend.push({ filename: msg.attachmentOriginalName, path: p, contentType: 'application/pdf' });
+                                }
+                            }
+
+                            if (channels.email && company.email) {
+                               try {
+                                    const htmlContent = specificDocs.length > 0 
+                                    ? buildEmailHtml(msg.message, companySpecificDocs, settings?.emailSignature)
+                                    : buildEmailHtml(msg.message, [], settings?.emailSignature);
+
+                                    const emailList = company.email.split(',').map(e => e.trim()).filter(e => e);
+                                    const mainEmail = emailList[0];
+                                    const ccEmails = emailList.slice(1).join(', ');
+
+                                    if (mainEmail) {
+                                        const senderName = process.env.EMAIL_FROM_NAME || 'Contabilidade';
+                                        const senderEmail = process.env.EMAIL_FROM_EMAIL || process.env.EMAIL_USER;
+                                        const fromAddress = `"${senderName}" <${senderEmail}>`;
+
+                                        await emailTransporter.sendMail({
+                                            from: fromAddress,
+                                            to: mainEmail,
+                                            cc: ccEmails,
+                                            subject: msg.title,
+                                            html: htmlContent,
+                                            attachments: attachmentsToSend.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
+                                        });
+                                    }
+                               } catch(e) { log(`[CRON] Erro email ${company.name}`, e); }
+                            }
+
+                            if (channels.whatsapp && company.whatsapp && clientReady) {
+                                try {
+                                    let number = company.whatsapp.replace(/\D/g, '');
+                                    if (!number.startsWith('55')) number = '55' + number;
+                                    const chatId = `${number}@c.us`;
+                                    
+                                    let waBody = `*${msg.title}*\n\n${msg.message}`;
+
+                                    if (specificDocs.length > 0) {
+                                        waBody = `*📄 Olá!* \n\n${msg.message}\n\n*Arquivos enviados:*`;
+                                        const listaArquivos = attachmentsToSend.map(att => 
+                                            `• ${att.docData?.docName || att.filename} (${att.docData?.category || 'Anexo'}, Venc: ${att.docData?.dueDate || 'N/A'})`
+                                        ).join('\n');
+                                        waBody += `\n${listaArquivos}`;
+                                    } else if (attachmentsToSend.length > 0) {
+                                        waBody += `\n\n*Arquivo enviado:* ${attachmentsToSend[0].filename}`;
+                                    }
+                                    
+                                    waBody += `\n\n${settings?.whatsappTemplate || ''}`;
+
+                                    await safeSendMessage(waWrapper.client, chatId, waBody);
+                                    
+                                    for (const att of attachmentsToSend) {
+                                        try {
+                                            const fileData = fs.readFileSync(att.path).toString('base64');
+                                            const media = new MessageMedia(att.contentType, fileData, att.filename);
+                                            await safeSendMessage(waWrapper.client, chatId, media);
+                                            await new Promise(r => setTimeout(r, 3000));
+                                        } catch (err) {
+                                            log(`[CRON] Erro media zap ${att.filename}`, err);
+                                        }
+                                    }
+                                } catch(e) { log(`[CRON] Erro zap ${company.name}`, e); }
+                            }
+                            
+                            if (companySpecificDocs.length > 0) {
+                                for (const doc of companySpecificDocs) {
+                                    if (doc.category) {
+                                        db.run(`INSERT INTO sent_logs (companyName, docName, category, sentAt, channels, status) VALUES (?, ?, ?, datetime('now', 'localtime'), ?, 'success')`, 
+                                            [company.name, doc.docName, doc.category, JSON.stringify(channels)]);
+                                        
+                                        db.run(`INSERT INTO document_status (companyId, category, competence, status) VALUES (?, ?, ?, 'sent') ON CONFLICT(companyId, category, competence) DO UPDATE SET status='sent'`, 
+                                            [doc.companyId, doc.category, doc.competence]);
+                                    }
+                                }
+                            }
+                        } 
+                    } // Fim do bloco de msg para empresas
+
+                    // Atualização da Recorrência (Para todos os tipos)
                     if (msg.recurrence === 'unico') {
                         db.run("UPDATE scheduled_messages SET active = 0 WHERE id = ?", [msg.id]);
                     } else {
                         const nextDate = new Date(msg.nextRun);
-                        if (msg.recurrence === 'mensal') nextDate.setMonth(nextDate.getMonth() + 1);
+                        if (msg.recurrence === 'diaria') nextDate.setDate(nextDate.getDate() + 1);
+                        else if (msg.recurrence === 'semanal') nextDate.setDate(nextDate.getDate() + 7);
+                        else if (msg.recurrence === 'mensal') nextDate.setMonth(nextDate.getMonth() + 1);
                         else if (msg.recurrence === 'trimestral') nextDate.setMonth(nextDate.getMonth() + 3);
                         else if (msg.recurrence === 'anual') nextDate.setFullYear(nextDate.getFullYear() + 1);
+                        
                         const nextRunStr = nextDate.toISOString().slice(0, 16);
                         db.run("UPDATE scheduled_messages SET nextRun = ? WHERE id = ?", [nextRunStr, msg.id]);
                     }
