@@ -459,33 +459,44 @@ const getWaClientWrapper = (username) => {
 
         // --- INTERCEPTADOR DE MENSAGENS (IA) ---
         client.on('message', async (msg) => {
+            // LOG INICIAL PARA DEBUG TOTAL
+            const sender = msg.from;
+            log(`[WhatsApp Inbound] Mensagem recebida de: ${sender} | Body: ${msg.body?.substring(0, 30)}...`);
+
             try {
+                if (msg.from.includes('@g.us') || msg.isStatus) {
+                    // log(`[WhatsApp Ignored] Mensagem de Grupo ou Status ignorada.`);
+                    return;
+                }
+
                 // 1. Obter configurações do banco para este usuário
                 const db = getDb(username);
                 const settings = await new Promise(resolve => {
                     db.get("SELECT settings FROM user_settings WHERE id = 1", (e, r) => resolve(r ? JSON.parse(r.settings) : null));
                 });
 
-                if (!settings || !settings.dailySummaryNumber) return;
+                if (!settings || !settings.dailySummaryNumber) {
+                    log(`[WhatsApp Auth] FALHA: Configuração 'dailySummaryNumber' não encontrada para o usuário.`);
+                    return;
+                }
 
                 // 2. Normalização e Validação do Remetente
                 // dailySummaryNumber: O número que VOCÊ configurou no sistema (seu pessoal)
                 // msg.from: O número que enviou a mensagem para o bot (deve ser seu pessoal)
                 
-                const authorizedNumber = settings.dailySummaryNumber.replace(/\D/g, ''); // Ex: 75981200125
-                const senderNumber = msg.from.replace('@c.us', '').replace(/\D/g, ''); // Ex: 5575981200125
+                const authorizedNumber = settings.dailySummaryNumber.replace(/\D/g, ''); 
+                const senderNumber = msg.from.replace('@c.us', '').replace(/\D/g, '');
+
+                log(`[WhatsApp Auth] Verificando: Sender(${senderNumber}) termina com Authorized(${authorizedNumber})?`);
 
                 // Verifica se o número do remetente (senderNumber) termina com o número autorizado (authorizedNumber)
                 // Isso cobre casos onde um tem 55 e o outro não.
                 if (!senderNumber.endsWith(authorizedNumber)) {
-                    // Mensagem de desconhecido ou não autorizado. Ignorar.
+                    log(`[WhatsApp Auth] BLOQUEADO: Número ${senderNumber} não é autorizado.`);
                     return; 
                 }
 
-                // Ignorar grupos e status
-                if (msg.from.includes('@g.us') || msg.isStatus) return;
-
-                log(`[AI Trigger] Mensagem autorizada de ${senderNumber}: ${msg.body}`);
+                log(`[AI Trigger] ACESSO PERMITIDO! Iniciando processamento IA...`);
 
                 // 3. Preparar entrada para a IA
                 let mediaPart = null;
@@ -515,6 +526,7 @@ const getWaClientWrapper = (username) => {
                 // 4. Processar com Gemini e Responder
                 const response = await processAI(username, textContent, mediaPart);
                 
+                log(`[AI Response] Resposta gerada (iniciando envio): ${response.substring(0, 30)}...`);
                 await safeSendMessage(client, msg.from, response);
 
             } catch (e) {
