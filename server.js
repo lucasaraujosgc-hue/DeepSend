@@ -12,7 +12,7 @@ import fs from 'fs';
 import sqlite3 from 'sqlite3';
 import multer from 'multer';
 import nodemailer from 'nodemailer';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,7 +53,6 @@ log("Servidor iniciando...");
 log(`Diretório de dados: ${DATA_DIR}`);
 
 // --- AI CONFIGURATION ---
-// Inicializa apenas se a chave estiver presente
 let ai = null;
 if (process.env.GEMINI_API_KEY) {
     ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -93,14 +92,12 @@ const safeSendMessage = async (client, chatId, content, options = {}) => {
     try {
         if (!client) throw new Error("Client é null");
 
-        // CORREÇÃO CRÍTICA (markedUnread error):
         const safeOptions = { 
             ...options, 
-            sendSeen: false 
+            sendSeen: false // Fix para crash 'markedUnread'
         };
 
         let finalChatId = chatId;
-        
         if (!finalChatId.includes('@')) {
              throw new Error("ChatId mal formatado");
         }
@@ -119,9 +116,6 @@ const safeSendMessage = async (client, chatId, content, options = {}) => {
 
     } catch (error) {
         log(`[WhatsApp] FALHA CRÍTICA NO ENVIO para ${chatId}`, error);
-        if (error.message && error.message.includes('markedUnread')) {
-            log(`[WhatsApp CRITICAL] Erro de 'markedUnread' detectado.`);
-        }
         throw error;
     }
 };
@@ -144,7 +138,7 @@ const getDb = (username) => {
         db.run(`CREATE TABLE IF NOT EXISTS user_settings (id INTEGER PRIMARY KEY CHECK (id = 1), settings TEXT)`);
         db.run(`CREATE TABLE IF NOT EXISTS scheduled_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, message TEXT, nextRun TEXT, recurrence TEXT, active INTEGER, type TEXT, channels TEXT, targetType TEXT, selectedCompanyIds TEXT, attachmentFilename TEXT, attachmentOriginalName TEXT, documentsPayload TEXT, createdBy TEXT)`);
         
-        // RAG & Assistente Tables
+        // Tabelas para RAG e Histórico do Assistente
         db.run(`CREATE TABLE IF NOT EXISTS chat_history (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, timestamp TEXT)`);
         db.run(`CREATE TABLE IF NOT EXISTS personal_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT, content TEXT, created_at TEXT, updated_at TEXT)`);
 
@@ -168,25 +162,24 @@ const getDb = (username) => {
 
 // --- AI LOGIC: Tools & Handler ---
 
-// Definição das Ferramentas (Tools) para o Gemini
 const assistantTools = [
     {
         name: "manage_task",
         description: "Cria, atualiza, deleta ou lista tarefas do Kanban.",
         parameters: {
-            type: "OBJECT",
+            type: Type.OBJECT,
             properties: {
-                action: { type: "STRING", enum: ["create", "list", "update", "delete"], description: "Ação a realizar." },
+                action: { type: Type.STRING, enum: ["create", "list", "update", "delete"], description: "Ação a realizar." },
                 data: { 
-                    type: "OBJECT", 
+                    type: Type.OBJECT, 
                     description: "Dados da tarefa. Para 'create', exige title. Para 'update'/'delete', exige id.",
                     properties: {
-                        id: { type: "NUMBER" },
-                        title: { type: "STRING" },
-                        description: { type: "STRING" },
-                        priority: { type: "STRING", enum: ["alta", "media", "baixa"] },
-                        status: { type: "STRING", enum: ["pendente", "em_andamento", "concluida"] },
-                        dueDate: { type: "STRING", description: "Data formato YYYY-MM-DD" }
+                        id: { type: Type.NUMBER },
+                        title: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                        priority: { type: Type.STRING, enum: ["alta", "media", "baixa"] },
+                        status: { type: Type.STRING, enum: ["pendente", "em_andamento", "concluida"] },
+                        dueDate: { type: Type.STRING, description: "Data formato YYYY-MM-DD" }
                     }
                 }
             },
@@ -197,16 +190,16 @@ const assistantTools = [
         name: "manage_company",
         description: "Gerencia o cadastro de empresas (clientes).",
         parameters: {
-            type: "OBJECT",
+            type: Type.OBJECT,
             properties: {
-                action: { type: "STRING", enum: ["create", "list", "search", "delete"] },
+                action: { type: Type.STRING, enum: ["create", "list", "search", "delete"] },
                 data: {
-                    type: "OBJECT",
+                    type: Type.OBJECT,
                     properties: {
-                        id: { type: "NUMBER" },
-                        name: { type: "STRING" },
-                        docNumber: { type: "STRING" },
-                        whatsapp: { type: "STRING" }
+                        id: { type: Type.NUMBER },
+                        name: { type: Type.STRING },
+                        docNumber: { type: Type.STRING },
+                        whatsapp: { type: Type.STRING }
                     }
                 }
             },
@@ -217,11 +210,11 @@ const assistantTools = [
         name: "manage_memory",
         description: "Salva ou busca informações na memória pessoal (RAG). Use para estudos, treinos, notas, etc.",
         parameters: {
-            type: "OBJECT",
+            type: Type.OBJECT,
             properties: {
-                action: { type: "STRING", enum: ["save", "search", "list_topics"] },
-                topic: { type: "STRING", description: "Tópico principal (ex: 'ingles', 'treino_a', 'lembrete')" },
-                content: { type: "STRING", description: "Conteúdo a ser salvo ou termo de busca." }
+                action: { type: Type.STRING, enum: ["save", "search", "list_topics"] },
+                topic: { type: Type.STRING, description: "Tópico principal (ex: 'ingles', 'treino_a', 'lembrete')" },
+                content: { type: Type.STRING, description: "Conteúdo a ser salvo ou termo de busca." }
             },
             required: ["action"]
         }
@@ -230,11 +223,11 @@ const assistantTools = [
         name: "schedule_message",
         description: "Agenda uma mensagem ou lembrete para ser enviado no futuro.",
         parameters: {
-            type: "OBJECT",
+            type: Type.OBJECT,
             properties: {
-                message: { type: "STRING" },
-                datetime: { type: "STRING", description: "Data e hora ISO 8601 ou YYYY-MM-DD HH:mm" },
-                recurrence: { type: "STRING", enum: ["unico", "mensal", "semanal"], description: "Padrão é unico." }
+                message: { type: Type.STRING },
+                datetime: { type: Type.STRING, description: "Data e hora ISO 8601 ou YYYY-MM-DD HH:mm" },
+                recurrence: { type: Type.STRING, enum: ["unico", "mensal", "semanal"], description: "Padrão é unico." }
             },
             required: ["message", "datetime"]
         }
@@ -247,7 +240,7 @@ const executeTool = async (name, args, db, username) => {
     
     if (name === "manage_task") {
         if (args.action === "list") {
-            return new Promise((resolve, reject) => {
+            return new Promise((resolve) => {
                 db.all("SELECT id, title, status, priority, dueDate FROM tasks WHERE status != 'concluida'", (err, rows) => {
                     if (err) resolve("Erro ao listar: " + err.message);
                     else resolve(JSON.stringify(rows));
@@ -264,7 +257,6 @@ const executeTool = async (name, args, db, username) => {
             });
         }
         if (args.action === "update" && args.data?.id) {
-            // Simplificado para exemplo
             const id = args.data.id;
             const updates = [];
             const values = [];
@@ -344,9 +336,9 @@ const processAI = async (username, userMessage, mediaPart = null) => {
     - O termo "mim", "eu" ou "meu" refere-se EXCLUSIVAMENTE ao número de telefone autorizado (o dono).
     - Você tem acesso total via tools para ler/escrever no banco de dados. Use-as sempre que o usuário pedir algo que exija dados (listar tarefas, ver empresas, salvar notas).
     - Não invente dados. Se não sabe, use uma tool para buscar ou pergunte.
-    - Se o usuário mandar áudio, ele já foi transcrito no texto da mensagem.
-    - Para estudos e treinos, use a tool 'manage_memory'.
-    - Seja conciso.`;
+    - Se o usuário mandar áudio, ele já foi transcrito no texto da mensagem ou está anexo.
+    - Para estudos e treinos, use a tool 'manage_memory' (RAG).
+    - Seja conciso e direto.`;
 
     // 3. Montar mensagem atual (Multimodal)
     const currentParts = [];
@@ -360,19 +352,17 @@ const processAI = async (username, userMessage, mediaPart = null) => {
             tools: [{ functionDeclarations: assistantTools }]
         });
 
-        // Chat session (com histórico manual para controle)
         const chat = model.startChat({ history: history });
         
         let response = await chat.sendMessage(currentParts);
         let functionCalls = response.functionCalls();
         let finalResponseText = "";
 
-        // Loop de Tool Calling (Agente)
+        // Loop de Tool Calling
         while (functionCalls && functionCalls.length > 0) {
             const call = functionCalls[0];
             const result = await executeTool(call.name, call.args, db, username);
             
-            // Envia resultado de volta ao modelo
             response = await chat.sendMessage([{
                 functionResponse: {
                     name: call.name,
@@ -442,7 +432,7 @@ const getWaClientWrapper = (username) => {
         // --- INTERCEPTADOR DE MENSAGENS (IA) ---
         client.on('message', async (msg) => {
             try {
-                // 1. Obter número autorizado
+                // Obter número autorizado
                 const db = getDb(username);
                 const settings = await new Promise(resolve => {
                     db.get("SELECT settings FROM user_settings WHERE id = 1", (e, r) => resolve(r ? JSON.parse(r.settings) : null));
@@ -450,24 +440,19 @@ const getWaClientWrapper = (username) => {
 
                 if (!settings || !settings.dailySummaryNumber) return;
 
-                // Normalização de números para comparação
+                // Verificação estrita do número
                 const authorizedNumber = settings.dailySummaryNumber.replace(/\D/g, '');
                 const senderNumber = msg.from.replace(/\D/g, '').replace('@c.us', '');
                 
-                // Comparação frouxa (contém) para lidar com prefixos de país variantes, mas estrita o suficiente
-                // Idealmente: verificar se senderNumber termina com authorizedNumber (sem ddd 55 as vezes)
-                // Vamos assumir formato completo BR: 55 + DDD + 9 + Num
+                // Aceita formatos com ou sem DDD/55 se houver match parcial seguro
                 if (!senderNumber.includes(authorizedNumber) && !authorizedNumber.includes(senderNumber)) {
-                    // Não é o chefe. Ignorar.
-                    return;
+                    return; // Ignora não autorizados
                 }
 
-                // Ignorar grupos e status
                 if (msg.from.includes('@g.us') || msg.isStatus) return;
 
-                log(`[AI Trigger] Mensagem do Chefe (${username}): ${msg.body}`);
+                log(`[AI Trigger] Mensagem autorizada de ${msg.from}: ${msg.body}`);
 
-                // Processar Mídia
                 let mediaPart = null;
                 let textContent = msg.body;
 
@@ -475,27 +460,16 @@ const getWaClientWrapper = (username) => {
                     try {
                         const media = await msg.downloadMedia();
                         if (media) {
-                            if (media.mimetype.startsWith('image/')) {
-                                mediaPart = {
-                                    inlineData: {
-                                        mimeType: media.mimetype,
-                                        data: media.data
-                                    }
-                                };
-                                textContent += " [Imagem anexada]";
-                            } else if (media.mimetype.startsWith('audio/')) {
-                                // Para áudio, o ideal seria Speech-to-Text. 
-                                // O Gemini Multimodal aceita áudio nativo em alguns modelos (Flash 2.5 Audio preview).
-                                // Vamos tentar enviar o blob de audio se for suportado ou avisar.
-                                // Como fallback simples: marcamos que é audio.
-                                // Se for 'gemini-1.5-flash', ele aceita audio.
-                                mediaPart = {
-                                    inlineData: {
-                                        mimeType: media.mimetype, // ex: audio/ogg
-                                        data: media.data
-                                    }
-                                };
-                                textContent = "Por favor, ouça este áudio e execute o que for pedido. " + (msg.body || "");
+                            mediaPart = {
+                                inlineData: {
+                                    mimeType: media.mimetype,
+                                    data: media.data
+                                }
+                            };
+                            if (media.mimetype.startsWith('audio/')) {
+                                textContent = "Por favor, analise este áudio. " + (msg.body || "");
+                            } else {
+                                textContent += " [Mídia anexa]";
                             }
                         }
                     } catch (mediaErr) {
@@ -503,9 +477,8 @@ const getWaClientWrapper = (username) => {
                     }
                 }
 
-                // Simular 'digitando'
-                const chat = await msg.getChat();
-                // chat.sendStateTyping(); // Desativado temporariamente devido a bug do wwebjs
+                // Simulate typing removed to prevent crashes
+                // await chat.sendStateTyping(); 
 
                 const response = await processAI(username, textContent, mediaPart);
                 
