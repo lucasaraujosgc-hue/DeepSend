@@ -371,36 +371,44 @@ const processAI = async (username, userMessage, mediaPart = null) => {
     // 3. Montar mensagem atual (Multimodal)
     const currentParts = [];
     if (mediaPart) currentParts.push(mediaPart);
-    currentParts.push({ text: userMessage });
+    if (userMessage) currentParts.push({ text: userMessage });
 
     try {
-        const model = ai.getGenerativeModel({ 
-            model: "gemini-2.5-flash-latest", // Modelo rápido
-            systemInstruction: systemInstruction,
-            tools: [{ functionDeclarations: assistantTools }]
+        // --- ATUALIZAÇÃO PARA O SDK @google/genai ---
+        const chat = ai.chats.create({ 
+            model: "gemini-2.5-flash-latest",
+            config: {
+                systemInstruction: systemInstruction,
+                tools: [{ functionDeclarations: assistantTools }]
+            },
+            history: history
         });
 
-        const chat = model.startChat({ history: history });
-        
-        let response = await chat.sendMessage(currentParts);
-        let functionCalls = response.functionCalls();
-        let finalResponseText = "";
+        let response = await chat.sendMessage({
+            message: currentParts
+        });
+
+        let functionCalls = response.functionCalls;
+        let loopCount = 0;
 
         // Loop de Tool Calling
-        while (functionCalls && functionCalls.length > 0) {
+        while (functionCalls && functionCalls.length > 0 && loopCount < 5) {
+            loopCount++;
             const call = functionCalls[0];
             const result = await executeTool(call.name, call.args, db, username);
             
-            response = await chat.sendMessage([{
-                functionResponse: {
-                    name: call.name,
-                    response: { result: result }
-                }
-            }]);
-            functionCalls = response.functionCalls();
+            response = await chat.sendMessage({
+                message: [{
+                    functionResponse: {
+                        name: call.name,
+                        response: { result: result }
+                    }
+                }]
+            });
+            functionCalls = response.functionCalls;
         }
 
-        finalResponseText = response.response.text();
+        const finalResponseText = response.text || "Comando processado (sem resposta de texto).";
 
         // 4. Salvar histórico
         db.run("INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)", ['user', userMessage, new Date().toISOString()]);
