@@ -347,6 +347,24 @@ const executeTool = async (name, args, db, username) => {
     return "Ferramenta desconhecida ou ação não suportada.";
 };
 
+// --- HELPER: Retry Logic for 429 Errors ---
+const runWithRetry = async (fn, retries = 3, delay = 2000) => {
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await fn();
+        } catch (error) {
+            // Se não for erro de rate limit, lança imediatamente
+            const isRateLimit = error.message?.includes('429') || error.status === 429;
+            if (!isRateLimit || i === retries - 1) throw error;
+            
+            // Backoff exponencial: 2s, 4s, 8s...
+            const waitTime = delay * Math.pow(2, i);
+            log(`[AI Retry] Limite de cota atingido (429). Aguardando ${waitTime/1000}s para tentar novamente...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+    }
+};
+
 // Processador Central de IA
 const processAI = async (username, userMessage, mediaPart = null) => {
     const db = getDb(username);
@@ -375,8 +393,9 @@ const processAI = async (username, userMessage, mediaPart = null) => {
 
     try {
         // --- ATUALIZAÇÃO PARA O SDK @google/genai ---
+        // Usando modelo estável para evitar 429 e 404
         const chat = ai.chats.create({ 
-            model: "gemini-2.0-flash-exp",
+            model: "gemini-2.0-flash",
             config: {
                 systemInstruction: systemInstruction,
                 tools: [{ functionDeclarations: assistantTools }]
@@ -384,9 +403,10 @@ const processAI = async (username, userMessage, mediaPart = null) => {
             history: history
         });
 
-        let response = await chat.sendMessage({
+        // Envia mensagem com Retry
+        let response = await runWithRetry(() => chat.sendMessage({
             message: currentParts
-        });
+        }));
 
         let functionCalls = response.functionCalls;
         let loopCount = 0;
@@ -397,14 +417,15 @@ const processAI = async (username, userMessage, mediaPart = null) => {
             const call = functionCalls[0];
             const result = await executeTool(call.name, call.args, db, username);
             
-            response = await chat.sendMessage({
+            // Envia resposta da tool com Retry
+            response = await runWithRetry(() => chat.sendMessage({
                 message: [{
                     functionResponse: {
                         name: call.name,
                         response: { result: result }
                     }
                 }]
-            });
+            }));
             functionCalls = response.functionCalls;
         }
 
@@ -458,7 +479,7 @@ const getWaClientWrapper = (username) => {
                     '--disable-accelerated-2d-canvas', 
                     '--no-first-run', 
                     '--no-zygote', 
-                    '--disable-gpu',
+                    '--disable-gpu', 
                     '--disable-software-rasterizer',
                     '--single-process'
                 ],
@@ -1072,7 +1093,7 @@ app.get(/.*/, (req, res) => {
     if (!req.path.startsWith('/api')) res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-// --- CRON JOBo ---
+// --- CRON JOB ---
 setInterval(() => {
     const envUsers = (process.env.USERS || '').split(',');
     envUsers.forEach(user => {
