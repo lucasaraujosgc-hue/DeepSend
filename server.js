@@ -269,7 +269,8 @@ const executeTool = async (name, args, db, username) => {
     if (name === "manage_task") {
         if (args.action === "list") {
             return new Promise((resolve) => {
-                db.all("SELECT id, title, status, priority, dueDate FROM tasks WHERE status != 'concluida'", (err, rows) => {
+                // REDUZIDO PARA 10 PARA ECONOMIA DE TOKENS
+                db.all("SELECT id, title, status, priority, dueDate FROM tasks WHERE status != 'concluida' LIMIT 10", (err, rows) => {
                     if (err) resolve("Erro ao listar: " + err.message);
                     else resolve(JSON.stringify(rows));
                 });
@@ -307,8 +308,8 @@ const executeTool = async (name, args, db, username) => {
     if (name === "manage_company") {
         if (args.action === "list" || args.action === "search") {
             const sql = args.data?.name 
-                ? "SELECT id, name, whatsapp FROM companies WHERE name LIKE ?" 
-                : "SELECT id, name, whatsapp FROM companies LIMIT 20";
+                ? "SELECT id, name, whatsapp FROM companies WHERE name LIKE ? LIMIT 10" 
+                : "SELECT id, name, whatsapp FROM companies LIMIT 10";
             const params = args.data?.name ? [`%${args.data.name}%`] : [];
             return new Promise(resolve => {
                 db.all(sql, params, (err, rows) => resolve(err ? "Erro" : JSON.stringify(rows)));
@@ -332,7 +333,7 @@ const executeTool = async (name, args, db, username) => {
             });
         }
         if (args.action === "list_topics") {
-             return new Promise(resolve => db.all("SELECT DISTINCT topic FROM personal_notes", (e, r) => resolve(JSON.stringify(r))));
+             return new Promise(resolve => db.all("SELECT DISTINCT topic FROM personal_notes LIMIT 20", (e, r) => resolve(JSON.stringify(r))));
         }
     }
 
@@ -353,13 +354,11 @@ const runWithRetry = async (fn, retries = 3, delay = 2000) => {
         try {
             return await fn();
         } catch (error) {
-            // Se não for erro de rate limit, lança imediatamente
             const isRateLimit = error.message?.includes('429') || error.status === 429;
             if (!isRateLimit || i === retries - 1) throw error;
             
-            // Backoff exponencial: 2s, 4s, 8s...
             const waitTime = delay * Math.pow(2, i);
-            log(`[AI Retry] Limite de cota atingido (429). Aguardando ${waitTime/1000}s para tentar novamente...`);
+            log(`[AI Retry] Limite de cota (429). Aguardando ${waitTime/1000}s...`);
             await new Promise(resolve => setTimeout(resolve, waitTime));
         }
     }
@@ -370,30 +369,42 @@ const processAI = async (username, userMessage, mediaPart = null) => {
     const db = getDb(username);
     if (!db || !ai) return "Sistema de IA indisponível.";
 
-    // 1. Recuperar contexto (últimas 10 mensagens)
+    // OTIMIZAÇÃO 1: Resposta imediata para saudações (Zero Tokens Gemini)
+    // Evita que a IA tente "pensar" ou buscar ferramentas para um simples "Oi"
+    const greetingRegex = /^(oi|ola|olá|bom dia|boa tarde|boa noite|opa|eai|tudo bem|bot|ajuda)\??$/i;
+    // Só aplica se não tiver mídia (imagem/áudio) junto
+    if (!mediaPart && greetingRegex.test(userMessage.trim())) {
+        const greetingResponse = "Olá! Sou o Contábil Bot. Como posso ajudar você hoje com suas tarefas, empresas ou agendamentos?";
+        
+        // Salva no histórico para manter contexto
+        db.run("INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)", ['user', userMessage, new Date().toISOString()]);
+        db.run("INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)", ['model', greetingResponse, new Date().toISOString()]);
+        
+        return greetingResponse;
+    }
+
+    // 2. Recuperar contexto (REDUZIDO PARA 6 para economizar tokens de entrada)
     const history = await new Promise(resolve => {
-        db.all("SELECT role, content FROM chat_history ORDER BY id DESC LIMIT 10", (err, rows) => {
+        db.all("SELECT role, content FROM chat_history ORDER BY id DESC LIMIT 6", (err, rows) => {
             resolve(rows ? rows.reverse().map(r => ({ role: r.role === 'user' ? 'user' : 'model', parts: [{ text: r.content }] })) : []);
         });
     });
 
-    // 2. Montar prompt com instrução de sistema
-    const systemInstruction = `Você é um assistente executivo estrito e eficiente chamado "Contábil Bot".
-    - O termo "mim", "eu" ou "meu" refere-se EXCLUSIVAMENTE ao número de telefone autorizado (o dono).
-    - Você tem acesso total via tools para ler/escrever no banco de dados. Use-as sempre que o usuário pedir algo que exija dados (listar tarefas, ver empresas, salvar notas).
-    - Não invente dados. Se não sabe, use uma tool para buscar ou pergunte.
-    - Se o usuário mandar áudio, ele já foi transcrito no texto da mensagem ou está anexo.
-    - Para estudos e treinos, use a tool 'manage_memory' (RAG).
-    - Seja conciso e direto.`;
+    // 3. Montar prompt com instrução de sistema OTIMIZADA
+    const systemInstruction = `Você é o "Contábil Bot", um assistente executivo eficiente.
+    - O termo "mim", "eu" ou "meu" refere-se EXCLUSIVAMENTE ao dono (usuário).
+    - ACESSO A DADOS: Você TEM permissão para usar tools (ler/escrever banco de dados).
+    - COMPORTAMENTO PASSIVO: NÃO use tools se o usuário não pediu explicitamente dados. Se ele perguntar "o que você faz?", apenas explique, NÃO liste tarefas.
+    - LISTAGEM: Ao listar tarefas ou empresas, seja breve. O sistema limita a 10 itens por vez.
+    - RAG: Use 'manage_memory' para salvar/buscar notas pessoais.
+    - ÁUDIO: Já foi transcrito no texto.
+    - Seja conciso.`;
 
-    // 3. Montar mensagem atual (Multimodal)
     const currentParts = [];
     if (mediaPart) currentParts.push(mediaPart);
     if (userMessage) currentParts.push({ text: userMessage });
 
     try {
-        // --- ATUALIZAÇÃO PARA O SDK @google/genai ---
-        // Usando modelo estável para evitar 429 e 404
         const chat = ai.chats.create({ 
             model: "gemini-2.0-flash",
             config: {
@@ -403,7 +414,6 @@ const processAI = async (username, userMessage, mediaPart = null) => {
             history: history
         });
 
-        // Envia mensagem com Retry
         let response = await runWithRetry(() => chat.sendMessage({
             message: currentParts
         }));
@@ -411,13 +421,11 @@ const processAI = async (username, userMessage, mediaPart = null) => {
         let functionCalls = response.functionCalls;
         let loopCount = 0;
 
-        // Loop de Tool Calling
         while (functionCalls && functionCalls.length > 0 && loopCount < 5) {
             loopCount++;
             const call = functionCalls[0];
             const result = await executeTool(call.name, call.args, db, username);
             
-            // Envia resposta da tool com Retry
             response = await runWithRetry(() => chat.sendMessage({
                 message: [{
                     functionResponse: {
@@ -429,9 +437,8 @@ const processAI = async (username, userMessage, mediaPart = null) => {
             functionCalls = response.functionCalls;
         }
 
-        const finalResponseText = response.text || "Comando processado (sem resposta de texto).";
+        const finalResponseText = response.text || "Comando processado.";
 
-        // 4. Salvar histórico
         db.run("INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)", ['user', userMessage, new Date().toISOString()]);
         db.run("INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)", ['model', finalResponseText, new Date().toISOString()]);
 
@@ -439,7 +446,7 @@ const processAI = async (username, userMessage, mediaPart = null) => {
 
     } catch (e) {
         log("[AI Error]", e);
-        return "Desculpe, tive um erro interno ao processar sua solicitação.";
+        return "Desculpe, estou sobrecarregado no momento (Muitos dados ou limite de cota). Tente novamente em alguns segundos.";
     }
 };
 

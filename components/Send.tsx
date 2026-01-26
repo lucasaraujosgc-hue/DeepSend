@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Send as SendIcon, Mail, MessageCircle, FileText, Trash, Clock, Check, Info, ArrowLeft, X, CheckSquare, Calendar, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Document, Company, UserSettings, ScheduledMessage } from '../types';
@@ -121,8 +122,8 @@ const Send: React.FC<SendProps> = ({ documents, onSendDocuments, onNavigateToDoc
         });
 
         if (result.success) {
-            // Fix: Cast from any to number[] for successIds
-            const successIds: number[] = (result.sentIds as any) || [];
+            // Fix: Cast explicitly to number[] for successIds
+            const successIds: number[] = (result.sentIds as number[]) || [];
             
             if (successIds.length > 0) {
                 onSendDocuments(successIds);
