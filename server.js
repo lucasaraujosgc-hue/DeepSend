@@ -61,6 +61,14 @@ if (process.env.GEMINI_API_KEY) {
     log("AI: GEMINI_API_KEY não encontrada. O assistente inteligente estará desativado.");
 }
 
+// --- CONFIGURAÇÃO DO EXPRESS ---
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+
+// Servir arquivos estáticos do frontend (pasta dist criada pelo Vite)
+// Importante: Isso deve vir antes das rotas de API para garantir performance
+app.use(express.static(path.join(__dirname, 'dist')));
+
 // --- HELPER: Puppeteer Lock Cleaner ---
 const cleanPuppeteerLocks = (dir) => {
     const locks = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
@@ -307,7 +315,6 @@ const executeTool = async (name, args, db, username) => {
     // 2. Atualizar Status (Marcar como Concluída)
     if (name === "update_task_status") {
         return new Promise((resolve) => {
-            // Tenta achar por ID se for numérico, senão por título
             const isId = /^\d+$/.test(args.task_id_or_title);
             const sqlCheck = isId ? "SELECT id FROM tasks WHERE id = ?" : "SELECT id FROM tasks WHERE title LIKE ?";
             const paramCheck = isId ? args.task_id_or_title : `%${args.task_id_or_title}%`;
@@ -353,7 +360,6 @@ const executeTool = async (name, args, db, username) => {
     // 5. Enviar Mensagem para Empresa (Disparo Real)
     if (name === "send_message_to_company") {
         return new Promise(async (resolve) => {
-            // A. Buscar a empresa
             db.all("SELECT * FROM companies WHERE name LIKE ? LIMIT 5", [`%${args.company_name_search}%`], async (err, rows) => {
                 if (err) { resolve("Erro no banco de dados."); return; }
                 if (!rows || rows.length === 0) { resolve(`Empresa com nome similar a "${args.company_name_search}" não encontrada.`); return; }
@@ -367,7 +373,6 @@ const executeTool = async (name, args, db, username) => {
                 const channels = args.channels || { whatsapp: true, email: true };
                 let logMsg = [];
 
-                // B. Enviar Email
                 if (channels.email && company.email) {
                     try {
                         const emailList = company.email.split(',').map(e => e.trim());
@@ -376,14 +381,13 @@ const executeTool = async (name, args, db, username) => {
                             to: emailList[0],
                             cc: emailList.slice(1),
                             subject: "Comunicado Contabilidade",
-                            text: args.message_body, // Fallback text
+                            text: args.message_body, 
                             html: buildEmailHtml(args.message_body, [], "Atenciosamente,\nContabilidade")
                         });
                         logMsg.push("E-mail enviado");
                     } catch (e) { logMsg.push("Falha no E-mail"); }
                 }
 
-                // C. Enviar WhatsApp
                 if (channels.whatsapp && company.whatsapp) {
                     const waWrapper = getWaClientWrapper(username);
                     if (waWrapper && waWrapper.status === 'connected') {
@@ -454,7 +458,6 @@ const processAI = async (username, userMessage, mediaPart = null) => {
     const db = getDb(username);
     if (!db || !ai) return "Sistema de IA indisponível.";
 
-    // OTIMIZAÇÃO: Zero Token para "Oi"
     const greetingRegex = /^(oi|ola|olá|bom dia|boa tarde|boa noite|opa|eai|tudo bem|ajuda)\??$/i;
     if (!mediaPart && greetingRegex.test(userMessage.trim())) {
         return "Olá! Sou seu assistente. Posso consultar empresas, anotar tarefas, enviar mensagens e lembrar você de coisas. Como ajudo?";
@@ -466,7 +469,6 @@ const processAI = async (username, userMessage, mediaPart = null) => {
         });
     });
 
-    // INSERÇÃO DA DATA/HORA ATUAL PARA CÁLCULOS RELATIVOS
     const now = new Date();
     const currentTimeStr = now.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
     const currentISO = now.toISOString();
@@ -1140,6 +1142,7 @@ app.get('/api/recent-sends', (req, res) => {
     getDb(req.user).all("SELECT * FROM sent_logs ORDER BY id DESC LIMIT 3", (err, rows) => res.json(rows || []));
 });
 
+// --- Rota Catch-All para servir o React corretamente ---
 app.get(/.*/, (req, res) => {
     if (!req.path.startsWith('/api')) res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
