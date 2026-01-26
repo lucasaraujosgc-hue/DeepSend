@@ -99,18 +99,42 @@ const safeSendMessage = async (client, chatId, content, options = {}) => {
 
         let finalChatId = chatId;
         if (!finalChatId.includes('@')) {
-             throw new Error("ChatId mal formatado");
+             // Tenta corrigir se vier apenas números
+             if (/^\d+$/.test(finalChatId)) {
+                 finalChatId = `${finalChatId}@c.us`;
+             } else {
+                 throw new Error("ChatId mal formatado: " + chatId);
+             }
+        }
+
+        // Tenta resolver o ID real do usuário (necessário para evitar erro 'No LID')
+        try {
+            const numberPart = finalChatId.replace('@c.us', '').replace('@g.us', '');
+            // Apenas tenta resolver para contatos individuais, não grupos
+            if (finalChatId.endsWith('@c.us')) {
+                const contactId = await client.getNumberId(numberPart);
+                if (contactId && contactId._serialized) {
+                    finalChatId = contactId._serialized;
+                    log(`[WhatsApp] ID resolvido via getNumberId: ${finalChatId}`);
+                } else {
+                    log(`[WhatsApp] getNumberId retornou null para ${numberPart}. O número pode não ter WhatsApp.`);
+                }
+            }
+        } catch (idErr) {
+            log(`[WhatsApp] Erro ao resolver getNumberId (prosseguindo com original): ${idErr.message}`);
         }
 
         try {
+            // Tenta obter o chat primeiro
             const chat = await client.getChatById(finalChatId);
             const msg = await chat.sendMessage(content, safeOptions);
-            log(`[WhatsApp] Mensagem enviada com sucesso. ID: ${msg.id.id}`);
+            log(`[WhatsApp] Mensagem enviada com sucesso (via Chat). ID: ${msg.id.id}`);
             return msg;
         } catch (chatError) {
-            log(`[WhatsApp] Erro ao obter objeto Chat. Tentando envio direto (Fallback). Erro: ${chatError.message}`);
+            log(`[WhatsApp] Falha via getChatById. Tentando client.sendMessage direto. Motivo: ${chatError.message}`);
+            // Fallback direto
             const msg = await client.sendMessage(finalChatId, content, safeOptions);
-            log(`[WhatsApp] Mensagem enviada via Fallback. ID: ${msg.id.id}`);
+            log(`[WhatsApp] Mensagem enviada com sucesso (via Client). ID: ${msg.id.id}`);
             return msg;
         }
 
