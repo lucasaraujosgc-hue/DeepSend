@@ -86,7 +86,7 @@ const cleanPuppeteerLocks = (dir) => {
     }
 };
 
-// --- HELPER: Robust WhatsApp Send ---
+// --- HELPER: Robust WhatsApp Send (Fixes No LID Error) ---
 const safeSendMessage = async (client, chatId, content, options = {}) => {
     log(`[WhatsApp] Tentando enviar mensagem para: ${chatId}`);
     try {
@@ -94,12 +94,13 @@ const safeSendMessage = async (client, chatId, content, options = {}) => {
 
         const safeOptions = { 
             ...options, 
-            sendSeen: false // Fix para crash 'markedUnread'
+            sendSeen: false 
         };
 
         let finalChatId = chatId;
+        
+        // 1. Correção de formatação básica
         if (!finalChatId.includes('@')) {
-             // Tenta corrigir se vier apenas números
              if (/^\d+$/.test(finalChatId)) {
                  finalChatId = `${finalChatId}@c.us`;
              } else {
@@ -107,32 +108,35 @@ const safeSendMessage = async (client, chatId, content, options = {}) => {
              }
         }
 
-        // Tenta resolver o ID real do usuário (necessário para evitar erro 'No LID')
+        // 2. CORREÇÃO "NO LID": Resolver o ID real do usuário antes de enviar
+        // O WhatsApp Web precisa "conhecer" o contato. Se for apenas um número string, pode falhar.
         try {
-            const numberPart = finalChatId.replace('@c.us', '').replace('@g.us', '');
-            // Apenas tenta resolver para contatos individuais, não grupos
             if (finalChatId.endsWith('@c.us')) {
+                const numberPart = finalChatId.replace('@c.us', '').replace(/\D/g, '');
                 const contactId = await client.getNumberId(numberPart);
+                
                 if (contactId && contactId._serialized) {
                     finalChatId = contactId._serialized;
-                    log(`[WhatsApp] ID resolvido via getNumberId: ${finalChatId}`);
+                    log(`[WhatsApp] ID resolvido com sucesso: ${finalChatId}`);
                 } else {
-                    log(`[WhatsApp] getNumberId retornou null para ${numberPart}. O número pode não ter WhatsApp.`);
+                    log(`[WhatsApp] AVISO: getNumberId não retornou dados para ${numberPart}. Tentando envio direto.`);
                 }
             }
         } catch (idErr) {
-            log(`[WhatsApp] Erro ao resolver getNumberId (prosseguindo com original): ${idErr.message}`);
+            log(`[WhatsApp] Erro não bloqueante ao resolver getNumberId: ${idErr.message}`);
         }
 
+        // 3. Tentativa de Envio
         try {
-            // Tenta obter o chat primeiro
+            // Tenta via objeto Chat primeiro (mais estável para histórico)
             const chat = await client.getChatById(finalChatId);
             const msg = await chat.sendMessage(content, safeOptions);
             log(`[WhatsApp] Mensagem enviada com sucesso (via Chat). ID: ${msg.id.id}`);
             return msg;
         } catch (chatError) {
-            log(`[WhatsApp] Falha via getChatById. Tentando client.sendMessage direto. Motivo: ${chatError.message}`);
-            // Fallback direto
+            log(`[WhatsApp] Falha via getChatById (${chatError.message}). Tentando client.sendMessage direto.`);
+            
+            // Fallback direto via cliente
             const msg = await client.sendMessage(finalChatId, content, safeOptions);
             log(`[WhatsApp] Mensagem enviada com sucesso (via Client). ID: ${msg.id.id}`);
             return msg;
@@ -456,7 +460,7 @@ const getWaClientWrapper = (username) => {
         // --- INTERCEPTADOR DE MENSAGENS (IA) ---
         client.on('message', async (msg) => {
             try {
-                // Obter número autorizado
+                // 1. Obter configurações do banco para este usuário
                 const db = getDb(username);
                 const settings = await new Promise(resolve => {
                     db.get("SELECT settings FROM user_settings WHERE id = 1", (e, r) => resolve(r ? JSON.parse(r.settings) : null));
@@ -464,19 +468,26 @@ const getWaClientWrapper = (username) => {
 
                 if (!settings || !settings.dailySummaryNumber) return;
 
-                // Verificação estrita do número
-                const authorizedNumber = settings.dailySummaryNumber.replace(/\D/g, '');
-                const senderNumber = msg.from.replace(/\D/g, '').replace('@c.us', '');
+                // 2. Normalização e Validação do Remetente
+                // dailySummaryNumber: O número que VOCÊ configurou no sistema (seu pessoal)
+                // msg.from: O número que enviou a mensagem para o bot (deve ser seu pessoal)
                 
-                // Aceita formatos com ou sem DDD/55 se houver match parcial seguro
-                if (!senderNumber.includes(authorizedNumber) && !authorizedNumber.includes(senderNumber)) {
-                    return; // Ignora não autorizados
+                const authorizedNumber = settings.dailySummaryNumber.replace(/\D/g, ''); // Ex: 75981200125
+                const senderNumber = msg.from.replace('@c.us', '').replace(/\D/g, ''); // Ex: 5575981200125
+
+                // Verifica se o número do remetente (senderNumber) termina com o número autorizado (authorizedNumber)
+                // Isso cobre casos onde um tem 55 e o outro não.
+                if (!senderNumber.endsWith(authorizedNumber)) {
+                    // Mensagem de desconhecido ou não autorizado. Ignorar.
+                    return; 
                 }
 
+                // Ignorar grupos e status
                 if (msg.from.includes('@g.us') || msg.isStatus) return;
 
-                log(`[AI Trigger] Mensagem autorizada de ${msg.from}: ${msg.body}`);
+                log(`[AI Trigger] Mensagem autorizada de ${senderNumber}: ${msg.body}`);
 
+                // 3. Preparar entrada para a IA
                 let mediaPart = null;
                 let textContent = msg.body;
 
@@ -501,9 +512,7 @@ const getWaClientWrapper = (username) => {
                     }
                 }
 
-                // Simulate typing removed to prevent crashes
-                // await chat.sendStateTyping(); 
-
+                // 4. Processar com Gemini e Responder
                 const response = await processAI(username, textContent, mediaPart);
                 
                 await safeSendMessage(client, msg.from, response);
