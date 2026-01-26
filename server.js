@@ -56,7 +56,7 @@ log(`Diretório de dados: ${DATA_DIR}`);
 let ai = null;
 if (process.env.GEMINI_API_KEY) {
     ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    log("AI: Google GenAI inicializado.");
+    log("AI: Google GenAI (v3 Flash Preview) inicializado.");
 } else {
     log("AI: GEMINI_API_KEY não encontrada. O assistente inteligente estará desativado.");
 }
@@ -86,7 +86,7 @@ const cleanPuppeteerLocks = (dir) => {
     }
 };
 
-// --- HELPER: Robust WhatsApp Send (Fixes No LID Error) ---
+// --- HELPER: Robust WhatsApp Send ---
 const safeSendMessage = async (client, chatId, content, options = {}) => {
     log(`[WhatsApp] Tentando enviar mensagem para: ${chatId}`);
     try {
@@ -99,7 +99,6 @@ const safeSendMessage = async (client, chatId, content, options = {}) => {
 
         let finalChatId = chatId;
         
-        // 1. Correção de formatação básica
         if (!finalChatId.includes('@')) {
              if (/^\d+$/.test(finalChatId)) {
                  finalChatId = `${finalChatId}@c.us`;
@@ -108,8 +107,6 @@ const safeSendMessage = async (client, chatId, content, options = {}) => {
              }
         }
 
-        // 2. CORREÇÃO "NO LID": Resolver o ID real do usuário antes de enviar
-        // O WhatsApp Web precisa "conhecer" o contato. Se for apenas um número string, pode falhar.
         try {
             if (finalChatId.endsWith('@c.us')) {
                 const numberPart = finalChatId.replace('@c.us', '').replace(/\D/g, '');
@@ -117,28 +114,18 @@ const safeSendMessage = async (client, chatId, content, options = {}) => {
                 
                 if (contactId && contactId._serialized) {
                     finalChatId = contactId._serialized;
-                    log(`[WhatsApp] ID resolvido com sucesso: ${finalChatId}`);
-                } else {
-                    log(`[WhatsApp] AVISO: getNumberId não retornou dados para ${numberPart}. Tentando envio direto.`);
                 }
             }
         } catch (idErr) {
             log(`[WhatsApp] Erro não bloqueante ao resolver getNumberId: ${idErr.message}`);
         }
 
-        // 3. Tentativa de Envio
         try {
-            // Tenta via objeto Chat primeiro (mais estável para histórico)
             const chat = await client.getChatById(finalChatId);
             const msg = await chat.sendMessage(content, safeOptions);
-            log(`[WhatsApp] Mensagem enviada com sucesso (via Chat). ID: ${msg.id.id}`);
             return msg;
         } catch (chatError) {
-            log(`[WhatsApp] Falha via getChatById (${chatError.message}). Tentando client.sendMessage direto.`);
-            
-            // Fallback direto via cliente
             const msg = await client.sendMessage(finalChatId, content, safeOptions);
-            log(`[WhatsApp] Mensagem enviada com sucesso (via Client). ID: ${msg.id.id}`);
             return msg;
         }
 
@@ -170,7 +157,6 @@ const getDb = (username) => {
         db.run(`CREATE TABLE IF NOT EXISTS chat_history (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, timestamp TEXT)`);
         db.run(`CREATE TABLE IF NOT EXISTS personal_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT, content TEXT, created_at TEXT, updated_at TEXT)`);
 
-        // Migrations
         db.all("PRAGMA table_info(scheduled_messages)", [], (err, rows) => {
             if (rows && !rows.some(col => col.name === 'documentsPayload')) {
                 db.run("ALTER TABLE scheduled_messages ADD COLUMN documentsPayload TEXT", () => {});
@@ -188,76 +174,55 @@ const getDb = (username) => {
     return db;
 };
 
-// --- AI LOGIC: Tools & Handler ---
+// --- AI LOGIC: Tools & Handler (Reformulada) ---
 
 const assistantTools = [
     {
-        name: "manage_task",
-        description: "Cria, atualiza, deleta ou lista tarefas do Kanban.",
+        name: "consult_tasks",
+        description: "Consulta suas tarefas existentes. Use para saber o que tem pendente.",
         parameters: {
             type: Type.OBJECT,
             properties: {
-                action: { type: Type.STRING, enum: ["create", "list", "update", "delete"], description: "Ação a realizar." },
-                data: { 
-                    type: Type.OBJECT, 
-                    description: "Dados da tarefa. Para 'create', exige title. Para 'update'/'delete', exige id.",
-                    properties: {
-                        id: { type: Type.NUMBER },
-                        title: { type: Type.STRING },
-                        description: { type: Type.STRING },
-                        priority: { type: Type.STRING, enum: ["alta", "media", "baixa"] },
-                        status: { type: Type.STRING, enum: ["pendente", "em_andamento", "concluida"] },
-                        dueDate: { type: Type.STRING, description: "Data formato YYYY-MM-DD" }
-                    }
-                }
-            },
-            required: ["action"]
+                status: { type: Type.STRING, enum: ["pendente", "em_andamento", "concluida"], description: "Filtrar por status. Padrão: pendente" },
+                limit: { type: Type.INTEGER, description: "Máximo de tarefas. Padrão 5." }
+            }
         }
     },
     {
-        name: "manage_company",
-        description: "Gerencia o cadastro de empresas (clientes).",
+        name: "add_task",
+        description: "Adiciona uma nova tarefa rápida ao sistema.",
         parameters: {
             type: Type.OBJECT,
             properties: {
-                action: { type: Type.STRING, enum: ["create", "list", "search", "delete"] },
-                data: {
-                    type: Type.OBJECT,
-                    properties: {
-                        id: { type: Type.NUMBER },
-                        name: { type: Type.STRING },
-                        docNumber: { type: Type.STRING },
-                        whatsapp: { type: Type.STRING }
-                    }
-                }
+                title: { type: Type.STRING, description: "Título da tarefa" },
+                description: { type: Type.STRING, description: "Detalhes da tarefa" },
+                priority: { type: Type.STRING, enum: ["alta", "media", "baixa"] }
             },
-            required: ["action"]
+            required: ["title"]
+        }
+    },
+    {
+        name: "search_company",
+        description: "Consulta dados de uma empresa cadastrada (Nome, CNPJ, Email, Zap).",
+        parameters: {
+            type: Type.OBJECT,
+            properties: {
+                name_or_doc: { type: Type.STRING, description: "Nome ou parte do CNPJ/CPF para buscar." }
+            },
+            required: ["name_or_doc"]
         }
     },
     {
         name: "manage_memory",
-        description: "Salva ou busca informações na memória pessoal (RAG). Use para estudos, treinos, notas, etc.",
+        description: "SISTEMA DE MEMÓRIA PESSOAL. Use para SALVAR conhecimentos gerados (treinos, estudos, receitas) ou BUSCAR informações passadas que não sejam tarefas/empresas.",
         parameters: {
             type: Type.OBJECT,
             properties: {
-                action: { type: Type.STRING, enum: ["save", "search", "list_topics"] },
-                topic: { type: Type.STRING, description: "Tópico principal (ex: 'ingles', 'treino_a', 'lembrete')" },
-                content: { type: Type.STRING, description: "Conteúdo a ser salvo ou termo de busca." }
+                action: { type: Type.STRING, enum: ["save", "search"], description: "Use 'save' para guardar algo novo útil. Use 'search' para lembrar de algo." },
+                topic: { type: Type.STRING, description: "Tópico chave (ex: 'treino_a', 'dieta', 'resumo_ingles')" },
+                content: { type: Type.STRING, description: "O conteúdo COMPLETO a ser salvo ou o termo de busca." }
             },
-            required: ["action"]
-        }
-    },
-    {
-        name: "schedule_message",
-        description: "Agenda uma mensagem ou lembrete para ser enviado no futuro.",
-        parameters: {
-            type: Type.OBJECT,
-            properties: {
-                message: { type: Type.STRING },
-                datetime: { type: Type.STRING, description: "Data e hora ISO 8601 ou YYYY-MM-DD HH:mm" },
-                recurrence: { type: Type.STRING, enum: ["unico", "mensal", "semanal"], description: "Padrão é unico." }
-            },
-            required: ["message", "datetime"]
+            required: ["action", "topic"]
         }
     }
 ];
@@ -266,86 +231,64 @@ const assistantTools = [
 const executeTool = async (name, args, db, username) => {
     log(`[AI Tool] Executando ${name} com args: ${JSON.stringify(args)}`);
     
-    if (name === "manage_task") {
-        if (args.action === "list") {
-            return new Promise((resolve) => {
-                // REDUZIDO PARA 10 PARA ECONOMIA DE TOKENS
-                db.all("SELECT id, title, status, priority, dueDate FROM tasks WHERE status != 'concluida' LIMIT 10", (err, rows) => {
-                    if (err) resolve("Erro ao listar: " + err.message);
-                    else resolve(JSON.stringify(rows));
-                });
+    if (name === "consult_tasks") {
+        return new Promise((resolve) => {
+            const status = args.status || 'pendente';
+            const limit = args.limit || 5;
+            db.all("SELECT id, title, priority, dueDate FROM tasks WHERE status = ? ORDER BY id DESC LIMIT ?", [status, limit], (err, rows) => {
+                if (err) resolve("Erro ao listar: " + err.message);
+                if (!rows || rows.length === 0) resolve("Nenhuma tarefa encontrada com este status.");
+                else resolve(JSON.stringify(rows));
             });
-        }
-        if (args.action === "create") {
-            const t = args.data || {};
-            const today = new Date().toISOString().split('T')[0];
-            return new Promise(resolve => {
-                db.run(`INSERT INTO tasks (title, description, status, priority, color, dueDate, recurrence, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, 
-                [t.title, t.description || '', 'pendente', t.priority || 'media', '#45B7D1', t.dueDate || '', 'nenhuma', today], 
-                function(err) { resolve(err ? "Erro: " + err.message : `Tarefa criada com ID ${this.lastID}`); });
-            });
-        }
-        if (args.action === "update" && args.data?.id) {
-            const id = args.data.id;
-            const updates = [];
-            const values = [];
-            if(args.data.status) { updates.push("status=?"); values.push(args.data.status); }
-            if(args.data.title) { updates.push("title=?"); values.push(args.data.title); }
-            values.push(id);
-            if(updates.length === 0) return "Nada para atualizar.";
-            
-            return new Promise(resolve => {
-                db.run(`UPDATE tasks SET ${updates.join(', ')} WHERE id=?`, values, (err) => resolve(err ? "Erro" : "Atualizado."));
-            });
-        }
-        if (args.action === "delete" && args.data?.id) {
-            return new Promise(resolve => {
-                db.run("DELETE FROM tasks WHERE id=?", [args.data.id], (err) => resolve(err ? "Erro" : "Deletado."));
-            });
-        }
+        });
     }
 
-    if (name === "manage_company") {
-        if (args.action === "list" || args.action === "search") {
-            const sql = args.data?.name 
-                ? "SELECT id, name, whatsapp FROM companies WHERE name LIKE ? LIMIT 10" 
-                : "SELECT id, name, whatsapp FROM companies LIMIT 10";
-            const params = args.data?.name ? [`%${args.data.name}%`] : [];
-            return new Promise(resolve => {
-                db.all(sql, params, (err, rows) => resolve(err ? "Erro" : JSON.stringify(rows)));
+    if (name === "add_task") {
+        const today = new Date().toISOString().split('T')[0];
+        return new Promise(resolve => {
+            db.run(`INSERT INTO tasks (title, description, status, priority, color, recurrence, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`, 
+            [args.title, args.description || '', 'pendente', args.priority || 'media', '#45B7D1', 'nenhuma', today], 
+            function(err) { resolve(err ? "Erro: " + err.message : `Tarefa criada (ID ${this.lastID}).`); });
+        });
+    }
+
+    if (name === "search_company") {
+        return new Promise(resolve => {
+            db.all("SELECT id, name, docNumber, email, whatsapp FROM companies WHERE name LIKE ? OR docNumber LIKE ? LIMIT 5",
+            [`%${args.name_or_doc}%`, `%${args.name_or_doc}%`], (err, rows) => {
+                if(err) resolve("Erro na busca.");
+                else resolve(rows.length ? JSON.stringify(rows) : "Nenhuma empresa encontrada.");
             });
-        }
+        });
     }
 
     if (name === "manage_memory") {
         if (args.action === "save") {
             const now = new Date().toISOString();
             return new Promise(resolve => {
+                // Remove duplicatas exatas do mesmo tópico recente para economizar espaço
                 db.run("INSERT INTO personal_notes (topic, content, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                [args.topic, args.content, now, now], (err) => resolve(err ? "Erro ao salvar nota." : "Nota salva com sucesso."));
+                [args.topic, args.content, now, now], (err) => resolve(err ? "Erro ao salvar memória." : "Informação salva na memória permanente com sucesso!"));
             });
         }
         if (args.action === "search") {
             return new Promise(resolve => {
                 const term = args.content || args.topic || "";
-                db.all("SELECT topic, content FROM personal_notes WHERE topic LIKE ? OR content LIKE ? ORDER BY updated_at DESC LIMIT 5",
-                [`%${term}%`, `%${term}%`], (err, rows) => resolve(JSON.stringify(rows.length ? rows : "Nenhuma nota encontrada.")));
+                db.all("SELECT topic, content, created_at FROM personal_notes WHERE topic LIKE ? OR content LIKE ? ORDER BY created_at DESC LIMIT 3",
+                [`%${term}%`, `%${term}%`], (err, rows) => {
+                    if (rows && rows.length > 0) {
+                        // Formata para o LLM entender melhor
+                        const context = rows.map(r => `[Tópico: ${r.topic} | Data: ${r.created_at}]\n${r.content}`).join("\n---\n");
+                        resolve(context);
+                    } else {
+                        resolve("Nada encontrado na memória sobre isso.");
+                    }
+                });
             });
         }
-        if (args.action === "list_topics") {
-             return new Promise(resolve => db.all("SELECT DISTINCT topic FROM personal_notes LIMIT 20", (e, r) => resolve(JSON.stringify(r))));
-        }
     }
 
-    if (name === "schedule_message") {
-        return new Promise(resolve => {
-            db.run(`INSERT INTO scheduled_messages (title, message, nextRun, recurrence, active, type, channels, targetType, createdBy) VALUES (?, ?, ?, ?, 1, 'message', ?, 'selected', ?)`,
-            ["Lembrete IA", args.message, args.datetime, args.recurrence || 'unico', JSON.stringify({whatsapp: true, email: false}), username],
-            function(err) { resolve(err ? "Erro agendamento" : `Lembrete agendado ID ${this.lastID}`); });
-        });
-    }
-
-    return "Ferramenta desconhecida ou ação não suportada.";
+    return "Ferramenta desconhecida.";
 };
 
 // --- HELPER: Retry Logic for 429 Errors ---
@@ -356,9 +299,8 @@ const runWithRetry = async (fn, retries = 3, delay = 2000) => {
         } catch (error) {
             const isRateLimit = error.message?.includes('429') || error.status === 429;
             if (!isRateLimit || i === retries - 1) throw error;
-            
             const waitTime = delay * Math.pow(2, i);
-            log(`[AI Retry] Limite de cota (429). Aguardando ${waitTime/1000}s...`);
+            log(`[AI Retry] Aguardando ${waitTime/1000}s...`);
             await new Promise(resolve => setTimeout(resolve, waitTime));
         }
     }
@@ -369,44 +311,45 @@ const processAI = async (username, userMessage, mediaPart = null) => {
     const db = getDb(username);
     if (!db || !ai) return "Sistema de IA indisponível.";
 
-    // OTIMIZAÇÃO 1: Resposta imediata para saudações (Zero Tokens Gemini)
-    // Evita que a IA tente "pensar" ou buscar ferramentas para um simples "Oi"
-    const greetingRegex = /^(oi|ola|olá|bom dia|boa tarde|boa noite|opa|eai|tudo bem|bot|ajuda)\??$/i;
-    // Só aplica se não tiver mídia (imagem/áudio) junto
+    // OTIMIZAÇÃO: Zero Token para "Oi"
+    const greetingRegex = /^(oi|ola|olá|bom dia|boa tarde|boa noite|opa|eai|tudo bem|ajuda)\??$/i;
     if (!mediaPart && greetingRegex.test(userMessage.trim())) {
-        const greetingResponse = "Olá! Sou o Contábil Bot. Como posso ajudar você hoje com suas tarefas, empresas ou agendamentos?";
-        
-        // Salva no histórico para manter contexto
-        db.run("INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)", ['user', userMessage, new Date().toISOString()]);
-        db.run("INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)", ['model', greetingResponse, new Date().toISOString()]);
-        
-        return greetingResponse;
+        return "Olá! Sou seu assistente. Posso consultar empresas, anotar tarefas ou acessar sua memória pessoal (treinos, estudos). Como ajudo?";
     }
 
-    // 2. Recuperar contexto (REDUZIDO PARA 6 para economizar tokens de entrada)
+    // 2. Recuperar contexto (MUITO CURTO para economizar - Apenas 4 últimas)
     const history = await new Promise(resolve => {
-        db.all("SELECT role, content FROM chat_history ORDER BY id DESC LIMIT 6", (err, rows) => {
+        db.all("SELECT role, content FROM chat_history ORDER BY id DESC LIMIT 4", (err, rows) => {
             resolve(rows ? rows.reverse().map(r => ({ role: r.role === 'user' ? 'user' : 'model', parts: [{ text: r.content }] })) : []);
         });
     });
 
-    // 3. Montar prompt com instrução de sistema OTIMIZADA
-    const systemInstruction = `Você é o "Contábil Bot", um assistente executivo eficiente.
-    - O termo "mim", "eu" ou "meu" refere-se EXCLUSIVAMENTE ao dono (usuário).
-    - ACESSO A DADOS: Você TEM permissão para usar tools (ler/escrever banco de dados).
-    - COMPORTAMENTO PASSIVO: NÃO use tools se o usuário não pediu explicitamente dados. Se ele perguntar "o que você faz?", apenas explique, NÃO liste tarefas.
-    - LISTAGEM: Ao listar tarefas ou empresas, seja breve. O sistema limita a 10 itens por vez.
-    - RAG: Use 'manage_memory' para salvar/buscar notas pessoais.
-    - ÁUDIO: Já foi transcrito no texto.
-    - Seja conciso.`;
+    // 3. System Instruction OTIMIZADA PARA RAG E ECONOMIA
+    const systemInstruction = `Você é um assistente pessoal inteligente e eficiente.
+    
+    SEUS OBJETIVOS:
+    1. **Dados Empresariais (Read-Only/Light Write):** 
+       - Use 'search_company' para consultar dados de clientes. Não invente dados.
+       - Use 'consult_tasks' ou 'add_task' para gerenciar afazeres do dia a dia.
+    
+    2. **Memória Pessoal (RAG - CRÍTICO):**
+       - Se o usuário pedir para CRIAR algo duradouro (ex: "Monte um treino", "Lista de estudos", "Receita"), você DEVE:
+         a) Gerar o conteúdo.
+         b) AUTOMATICAMENTE chamar a tool 'manage_memory' (action='save') para salvar esse conteúdo gerado.
+       - Se o usuário perguntar algo pessoal do passado (ex: "Qual meu treino?", "O que estou estudando?"), use 'manage_memory' (action='search') PRIMEIRO antes de responder.
+
+    3. **Economia de Tokens:**
+       - Seja direto. Não repita a pergunta do usuário.
+       - Se não encontrar dados no banco, diga apenas "Não encontrei".`;
 
     const currentParts = [];
     if (mediaPart) currentParts.push(mediaPart);
     if (userMessage) currentParts.push({ text: userMessage });
 
     try {
+        // USANDO MODELO MAIS RECENTE CONFORME SOLICITADO
         const chat = ai.chats.create({ 
-            model: "gemini-2.0-flash",
+            model: "gemini-3-flash-preview", 
             config: {
                 systemInstruction: systemInstruction,
                 tools: [{ functionDeclarations: assistantTools }]
@@ -421,9 +364,14 @@ const processAI = async (username, userMessage, mediaPart = null) => {
         let functionCalls = response.functionCalls;
         let loopCount = 0;
 
+        // Loop de execução de Tools
         while (functionCalls && functionCalls.length > 0 && loopCount < 5) {
             loopCount++;
             const call = functionCalls[0];
+            
+            // Feedback visual no log
+            log(`[AI Thinking] Chamando ferramenta: ${call.name}`);
+
             const result = await executeTool(call.name, call.args, db, username);
             
             response = await runWithRetry(() => chat.sendMessage({
@@ -437,8 +385,9 @@ const processAI = async (username, userMessage, mediaPart = null) => {
             functionCalls = response.functionCalls;
         }
 
-        const finalResponseText = response.text || "Comando processado.";
+        const finalResponseText = response.text || "Feito.";
 
+        // Salvar histórico curto
         db.run("INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)", ['user', userMessage, new Date().toISOString()]);
         db.run("INSERT INTO chat_history (role, content, timestamp) VALUES (?, ?, ?)", ['model', finalResponseText, new Date().toISOString()]);
 
@@ -446,7 +395,8 @@ const processAI = async (username, userMessage, mediaPart = null) => {
 
     } catch (e) {
         log("[AI Error]", e);
-        return "Desculpe, estou sobrecarregado no momento (Muitos dados ou limite de cota). Tente novamente em alguns segundos.";
+        if (e.message?.includes('404')) return "Erro: O modelo gemini-3-flash-preview ainda não está disponível na sua região ou chave. Tente reverter para gemini-2.0-flash.";
+        return "Tive um problema momentâneo. Tente novamente.";
     }
 };
 
@@ -495,38 +445,27 @@ const getWaClientWrapper = (username) => {
 
         // --- INTERCEPTADOR DE MENSAGENS (IA) ---
         client.on('message', async (msg) => {
-            // LOG INICIAL PARA DEBUG TOTAL
             const sender = msg.from;
             log(`[WhatsApp Inbound] Mensagem recebida de: ${sender} | Body: ${msg.body?.substring(0, 30)}...`);
 
             try {
                 if (msg.from.includes('@g.us') || msg.isStatus) {
-                    // log(`[WhatsApp Ignored] Mensagem de Grupo ou Status ignorada.`);
                     return;
                 }
 
-                // 1. Obter configurações do banco para este usuário
                 const db = getDb(username);
                 const settings = await new Promise(resolve => {
                     db.get("SELECT settings FROM user_settings WHERE id = 1", (e, r) => resolve(r ? JSON.parse(r.settings) : null));
                 });
 
                 if (!settings || !settings.dailySummaryNumber) {
-                    log(`[WhatsApp Auth] FALHA: Configuração 'dailySummaryNumber' não encontrada para o usuário.`);
+                    log(`[WhatsApp Auth] FALHA: Configuração 'dailySummaryNumber' não encontrada.`);
                     return;
                 }
 
-                // 2. Normalização e Validação do Remetente
-                // dailySummaryNumber: O número que VOCÊ configurou no sistema (seu pessoal)
-                // msg.from: O número que enviou a mensagem para o bot (deve ser seu pessoal)
-                
                 const authorizedNumber = settings.dailySummaryNumber.replace(/\D/g, ''); 
                 const senderNumber = msg.from.replace('@c.us', '').replace(/\D/g, '');
 
-                log(`[WhatsApp Auth] Verificando: Sender(${senderNumber}) termina com Authorized(${authorizedNumber})?`);
-
-                // Verifica se o número do remetente (senderNumber) termina com o número autorizado (authorizedNumber)
-                // Isso cobre casos onde um tem 55 e o outro não.
                 if (!senderNumber.endsWith(authorizedNumber)) {
                     log(`[WhatsApp Auth] BLOQUEADO: Número ${senderNumber} não é autorizado.`);
                     return; 
@@ -534,7 +473,6 @@ const getWaClientWrapper = (username) => {
 
                 log(`[AI Trigger] ACESSO PERMITIDO! Iniciando processamento IA...`);
 
-                // 3. Preparar entrada para a IA
                 let mediaPart = null;
                 let textContent = msg.body;
 
@@ -559,10 +497,7 @@ const getWaClientWrapper = (username) => {
                     }
                 }
 
-                // 4. Processar com Gemini e Responder
                 const response = await processAI(username, textContent, mediaPart);
-                
-                log(`[AI Response] Resposta gerada (iniciando envio): ${response.substring(0, 30)}...`);
                 await safeSendMessage(client, msg.from, response);
 
             } catch (e) {
