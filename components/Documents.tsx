@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive, Loader2, FilePlus, AlertTriangle, Trash, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Upload, CalendarCheck, Search, FileText, Check, X, Play, Settings as SettingsIcon, Filter, FolderArchive, Loader2, FilePlus, AlertTriangle, Trash, ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { DOCUMENT_CATEGORIES } from '../constants';
 import { UserSettings, Document, Company, UploadedFile } from '../types';
 import { identifyCategory, identifyCompany, extractTextFromPDF, removeAccents } from '../utils/documentProcessor';
@@ -54,8 +54,10 @@ const Documents: React.FC<DocumentsProps> = ({
   const [processing, setProcessing] = useState(false);
   const [isUploadingConfirmed, setIsUploadingConfirmed] = useState(false);
   
-  const [processingCompanyId, setProcessingCompanyId] = useState<string>('');
-  const [processingCategoryFilter, setProcessingCategoryFilter] = useState<string>('');
+  // --- NOVOS ESTADOS PARA MULTI-SELECT ---
+  const [filterCompanyIds, setFilterCompanyIds] = useState<number[]>([]);
+  const [filterCategories, setFilterCategories] = useState<string[]>([]);
+  
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [previewFiles, setPreviewFiles] = useState<PreviewFile[]>([]);
 
@@ -130,6 +132,31 @@ const Documents: React.FC<DocumentsProps> = ({
     }
   };
 
+  // --- FUNÇÕES DE FILTRO E ADD/REMOVE ---
+  const addCompanyFilter = (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const val = Number(e.target.value);
+      if (val && !filterCompanyIds.includes(val)) {
+          setFilterCompanyIds([...filterCompanyIds, val]);
+      }
+      e.target.value = ''; // Reset select
+  };
+
+  const removeCompanyFilter = (id: number) => {
+      setFilterCompanyIds(filterCompanyIds.filter(fid => fid !== id));
+  };
+
+  const addCategoryFilter = (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const val = e.target.value;
+      if (val && !filterCategories.includes(val)) {
+          setFilterCategories([...filterCategories, val]);
+      }
+      e.target.value = ''; // Reset select
+  };
+
+  const removeCategoryFilter = (cat: string) => {
+      setFilterCategories(filterCategories.filter(c => c !== cat));
+  };
+
   const prepareMultipleFiles = async (fileList: File[]) => {
       setProcessing(true);
       setPreviewFiles([]);
@@ -148,23 +175,50 @@ const Documents: React.FC<DocumentsProps> = ({
           const textForAnalysis = removeAccents((pdfText + " " + file.name).toLowerCase());
           
           let detectedCompanyId: number | null = null;
-          if (processingCompanyId) {
-              detectedCompanyId = Number(processingCompanyId);
-          } else {
-              const company = identifyCompany(textForAnalysis, companies);
-              if (company) detectedCompanyId = company.id;
+          // Se houver APENAS UMA empresa no filtro, forçamos ela se não identificar nada?
+          // A lógica pedida é: Filtros ativos restringem. 
+          // Se 1 empresa selecionada, só processa arquivos dela.
+          
+          const identifiedCompany = identifyCompany(textForAnalysis, companies);
+          if (identifiedCompany) detectedCompanyId = identifiedCompany.id;
+
+          // --- LÓGICA DE FILTRO DE EMPRESA ---
+          // Se houver filtros, e o ID detectado NÃO estiver neles, pula este arquivo.
+          if (filterCompanyIds.length > 0) {
+              if (!detectedCompanyId) {
+                  // Se não detectou, mas temos 1 filtro selecionado, podemos assumir que é dessa empresa?
+                  // Risco alto. Melhor ignorar. Mas o usuário disse: "caso esteja selecionada só uma empresa... só irá aparecer os que foram selecionados".
+                  // Isso implica que o filtro atua como whitelist.
+                  // Se não detectou, é seguro ignorar.
+                  // Se o usuário QUER que force, ele seleciona 1 e o sistema poderia inferir.
+                  // Vamos manter seguro: Se não detectou ou detectou errado, ignora.
+                  // EXCEÇÃO: Se só tem 1 filtro, talvez o usuário queira forçar upload para ela.
+                  // Mas o prompt diz "só irá aparecer os que foram selecionados no filtros".
+                  if (filterCompanyIds.length === 1) {
+                      detectedCompanyId = filterCompanyIds[0]; // Força se for único? O usuário pode estar subindo lote específico.
+                  } else {
+                      continue; // Ignora arquivo
+                  }
+              } else {
+                  if (!filterCompanyIds.includes(detectedCompanyId)) continue;
+              }
           }
 
           let detectedCategory = '';
-          if (processingCategoryFilter) {
-              detectedCategory = processingCategoryFilter;
-          } else {
-              const category = identifyCategory(
-                  textForAnalysis, 
-                  userSettings?.categoryKeywords || {}, 
-                  userSettings?.priorityCategories || [] // Passando prioridades
-              );
-              detectedCategory = category ?? 'Outros';
+          const identifiedCat = identifyCategory(
+              textForAnalysis, 
+              userSettings?.categoryKeywords || {}, 
+              userSettings?.priorityCategories || [] 
+          );
+          detectedCategory = identifiedCat ?? 'Outros';
+
+          // --- LÓGICA DE FILTRO DE CATEGORIA ---
+          if (filterCategories.length > 0) {
+              if (filterCategories.length === 1 && detectedCategory === 'Outros') {
+                   detectedCategory = filterCategories[0]; // Força se só tem 1 e não achou nada
+              } else if (!filterCategories.includes(detectedCategory)) {
+                   continue; // Ignora se não bate com filtro
+              }
           }
 
           tempFiles.push({
@@ -219,23 +273,31 @@ const Documents: React.FC<DocumentsProps> = ({
             const textForAnalysis = removeAccents((pdfText + " " + simpleName).toLowerCase());
 
             let detectedCompanyId: number | null = null;
-            if (processingCompanyId) {
-                detectedCompanyId = Number(processingCompanyId);
-            } else {
-                const company = identifyCompany(textForAnalysis, companies);
-                if (company) detectedCompanyId = company.id;
+            const identifiedCompany = identifyCompany(textForAnalysis, companies);
+            if (identifiedCompany) detectedCompanyId = identifiedCompany.id;
+
+            // Filtro Empresa
+            if (filterCompanyIds.length > 0) {
+                if (!detectedCompanyId) {
+                    if (filterCompanyIds.length === 1) detectedCompanyId = filterCompanyIds[0];
+                    else continue;
+                } else {
+                    if (!filterCompanyIds.includes(detectedCompanyId)) continue;
+                }
             }
 
             let detectedCategory = '';
-            if (processingCategoryFilter) {
-                detectedCategory = processingCategoryFilter;
-            } else {
-                const category = identifyCategory(
-                    textForAnalysis, 
-                    userSettings?.categoryKeywords || {}, 
-                    userSettings?.priorityCategories || [] // Passando prioridades
-                );
-                detectedCategory = category ?? 'Outros';
+            const identifiedCat = identifyCategory(
+                textForAnalysis, 
+                userSettings?.categoryKeywords || {}, 
+                userSettings?.priorityCategories || [] 
+            );
+            detectedCategory = identifiedCat ?? 'Outros';
+
+            // Filtro Categoria
+            if (filterCategories.length > 0) {
+                if (filterCategories.length === 1 && detectedCategory === 'Outros') detectedCategory = filterCategories[0];
+                else if (!filterCategories.includes(detectedCategory)) continue;
             }
 
             tempFiles.push({
@@ -386,7 +448,9 @@ const Documents: React.FC<DocumentsProps> = ({
       <div className="bg-white rounded-xl shadow-sm border border-blue-100 overflow-hidden">
          <div className="bg-blue-50 p-4 border-b border-blue-100 flex items-center gap-2 text-blue-800"><SettingsIcon className="w-5 h-5" /><h3 className="font-bold">Processamento Automático</h3></div>
         <div className="p-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
+                
+                {/* 1. Arquivos */}
                 <div className="lg:col-span-1">
                     <label className="block text-sm font-semibold text-gray-700 mb-1">Arquivos (ZIP ou Múltiplos)</label>
                     <div className="input-group flex items-center border border-gray-300 rounded-lg overflow-hidden bg-white cursor-pointer hover:bg-gray-50" onClick={handleProcessClick}>
@@ -395,6 +459,8 @@ const Documents: React.FC<DocumentsProps> = ({
                          <input type="file" multiple accept=".zip,.rar,.pdf,.png,.jpg,.jpeg,.doc,.docx" ref={fileInputRef} className="hidden" onChange={handleFileSelect} />
                     </div>
                 </div>
+
+                {/* 2. Competência */}
                 <div>
                    <label className="block text-sm font-semibold text-gray-700 mb-1">Competência do Processamento</label>
                    <div className="flex gap-1">
@@ -403,20 +469,50 @@ const Documents: React.FC<DocumentsProps> = ({
                        <button type="button" onClick={() => changeCompetence(processingCompetence, 1, setProcessingCompetence)} className="p-2 border border-gray-300 rounded-r-lg hover:bg-gray-100"><ChevronRight className="w-4 h-4" /></button>
                    </div>
                 </div>
-                <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Filtrar por Empresa</label>
-                    <select className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm" value={processingCompanyId} onChange={(e) => setProcessingCompanyId(e.target.value)}>
-                        <option value="">Automático (Identificar no PDF)</option>
-                        {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
+
+                {/* 3. Filtros Multiplos */}
+                <div className="lg:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-gray-100">
+                    
+                    {/* Filtro Empresas */}
+                    <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">Filtrar por Empresa(s)</label>
+                        <select className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm mb-2" onChange={addCompanyFilter} value="">
+                            <option value="">Adicionar filtro de empresa...</option>
+                            {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        </select>
+                        <div className="flex flex-wrap gap-2 min-h-[32px]">
+                            {filterCompanyIds.length === 0 && <span className="text-xs text-gray-400 italic py-1">Automático (Detectar no arquivo)</span>}
+                            {filterCompanyIds.map(id => {
+                                const comp = companies.find(c => c.id === id);
+                                return (
+                                    <span key={id} className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full flex items-center gap-1">
+                                        {comp?.name || id}
+                                        <button onClick={() => removeCompanyFilter(id)} className="hover:text-blue-900"><X className="w-3 h-3" /></button>
+                                    </span>
+                                )
+                            })}
+                        </div>
+                    </div>
+
+                    {/* Filtro Categorias */}
+                    <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">Filtrar por Categoria(s)</label>
+                        <select className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm mb-2" onChange={addCategoryFilter} value="">
+                            <option value="">Adicionar filtro de categoria...</option>
+                            {allCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                        </select>
+                        <div className="flex flex-wrap gap-2 min-h-[32px]">
+                            {filterCategories.length === 0 && <span className="text-xs text-gray-400 italic py-1">Automático (Detectar no arquivo)</span>}
+                            {filterCategories.map(cat => (
+                                <span key={cat} className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full flex items-center gap-1">
+                                    {cat}
+                                    <button onClick={() => removeCategoryFilter(cat)} className="hover:text-green-900"><X className="w-3 h-3" /></button>
+                                </span>
+                            ))}
+                        </div>
+                    </div>
                 </div>
-                <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Filtrar por Categoria</label>
-                    <select className="w-full border border-gray-300 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 text-sm" value={processingCategoryFilter} onChange={(e) => setProcessingCategoryFilter(e.target.value)}>
-                        <option value="">Automático (Identificar no PDF)</option>
-                        {allCategories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                    </select>
-                </div>
+
             </div>
             <div className="flex flex-col items-center">
                  <button onClick={handleProcessClick} disabled={processing} className="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 shadow-lg shadow-blue-500/20 font-bold flex items-center gap-2 disabled:opacity-70 transition-all">

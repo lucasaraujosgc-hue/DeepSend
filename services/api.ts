@@ -38,7 +38,7 @@ const handleResponse = async (res: Response) => {
 };
 
 export const api = {
-  // Authenticationo
+  // Authentication
   login: async (user: string, pass: string): Promise<{ success: boolean; token?: string }> => {
     try {
       const res = await fetch(`${API_URL}/login`, {
@@ -51,6 +51,26 @@ export const api = {
       console.error("Login failed", error);
       return { success: false };
     }
+  },
+
+  // Email Client Endpoints
+  getEmails: async (box: 'INBOX' | 'Sent' = 'INBOX'): Promise<any[]> => {
+      const res = await fetch(`${API_URL}/email/messages?box=${box}`, { headers: getAuthHeader() });
+      return handleResponse(res);
+  },
+
+  getEmailContent: async (uid: number, box: string): Promise<any> => {
+      const res = await fetch(`${API_URL}/email/message/${uid}?box=${box}`, { headers: getAuthHeader() });
+      return handleResponse(res);
+  },
+
+  sendEmailDirect: async (formData: FormData): Promise<{ success: boolean }> => {
+      const res = await fetch(`${API_URL}/email/send-direct`, {
+          method: 'POST',
+          headers: getAuthHeader(), // Content-Type is auto-set by fetch for FormData
+          body: formData
+      });
+      return handleResponse(res);
   },
 
   // Settings
