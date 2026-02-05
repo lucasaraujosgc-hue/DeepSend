@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { 
   LayoutDashboard, 
@@ -13,8 +14,7 @@ import {
   X,
   Mails,
   UserCog,
-  LogOut,
-  Mail // Ícone de e-mail
+  LogOut
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -85,24 +85,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, setActivePage, isOpen, se
               </button>
             );
           })}
-
-          {/* New Email Tab - Highlighted */}
-          <div className="pt-2 mt-2 border-t border-slate-700">
-             <button
-                onClick={() => {
-                  setActivePage('emailclient');
-                  if (window.innerWidth < 768) setIsOpen(false);
-                }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md transition-colors duration-200
-                  ${activePage === 'emailclient'
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/20' 
-                    : 'text-indigo-300 hover:bg-slate-800 hover:text-white'
-                  }`}
-              >
-                <Mail className="w-4 h-4" />
-                <span className="font-medium text-sm">E-mail</span>
-              </button>
-          </div>
         </nav>
 
         {/* Logout Section */}

@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
@@ -11,7 +12,6 @@ import ScheduledMessages from './components/ScheduledMessages';
 import Settings from './components/Settings';
 import Send from './components/Send'; 
 import Login from './components/Login';
-import EmailClient from './components/EmailClient'; // New Import
 import { DEFAULT_USER_SETTINGS, MOCK_DOCUMENTS } from './constants';
 import { UserSettings, Document, UploadedFile } from './types';
 import { api } from './services/api';
@@ -183,8 +183,6 @@ const App: React.FC = () => {
         return <ScheduledMessages />;
       case 'settings':
         return <Settings settings={userSettings} onSave={setUserSettings} />;
-      case 'emailclient': // Nova Rota
-        return <EmailClient />;
       default:
         return (
           <div className="flex flex-col items-center justify-center h-[50vh] text-gray-400">
@@ -208,7 +206,7 @@ const App: React.FC = () => {
       <main className="flex-1 overflow-auto w-full relative">
         <header className="bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center sticky top-0 z-30">
           <h2 className="text-lg font-semibold text-gray-700 capitalize">
-            {activePage === 'bulksend' ? 'Envio em Massa' : activePage === 'settings' ? 'Usuário' : activePage === 'emailclient' ? 'E-mail' : activePage === 'send' ? 'Envio' : activePage}
+            {activePage === 'bulksend' ? 'Envio em Massa' : activePage === 'settings' ? 'Usuário' : activePage === 'send' ? 'Envio' : activePage}
           </h2>
           <div className="flex items-center gap-4">
              <div className="text-sm text-right hidden sm:block">
