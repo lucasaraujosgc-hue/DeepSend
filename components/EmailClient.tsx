@@ -1,19 +1,59 @@
-import React, { useState, useEffect } from 'react';
-import { Mail, Inbox, Send, RefreshCw, Plus, Trash, Search, Paperclip, X, ChevronLeft, Loader2, File } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Mail, Inbox, Send, RefreshCw, Plus, Trash, Search, Paperclip, X, ChevronLeft, Loader2, File, ChevronRight, Bold, Italic, List, Type, AlignLeft } from 'lucide-react';
 import { api } from '../services/api';
+
+// --- EDITOR DE TEXTO RICO SIMPLES ---
+const RichTextEditor: React.FC<{ value: string, onChange: (html: string) => void }> = ({ value, onChange }) => {
+    const editorRef = useRef<HTMLDivElement>(null);
+
+    const execCmd = (cmd: string, arg?: string) => {
+        document.execCommand(cmd, false, arg);
+        if (editorRef.current) onChange(editorRef.current.innerHTML);
+    };
+
+    return (
+        <div className="border border-gray-300 rounded-lg overflow-hidden flex flex-col flex-1 h-full">
+            <div className="bg-gray-50 border-b border-gray-200 p-2 flex gap-2">
+                <button type="button" onClick={() => execCmd('bold')} className="p-1.5 hover:bg-gray-200 rounded text-gray-700" title="Negrito"><Bold className="w-4 h-4" /></button>
+                <button type="button" onClick={() => execCmd('italic')} className="p-1.5 hover:bg-gray-200 rounded text-gray-700" title="Itálico"><Italic className="w-4 h-4" /></button>
+                <div className="w-px bg-gray-300 mx-1"></div>
+                <button type="button" onClick={() => execCmd('insertUnorderedList')} className="p-1.5 hover:bg-gray-200 rounded text-gray-700" title="Lista"><List className="w-4 h-4" /></button>
+                <button type="button" onClick={() => execCmd('insertParagraph')} className="p-1.5 hover:bg-gray-200 rounded text-gray-700" title="Parágrafo"><AlignLeft className="w-4 h-4" /></button>
+                <div className="w-px bg-gray-300 mx-1"></div>
+                <select onChange={(e) => execCmd('fontSize', e.target.value)} className="text-xs border border-gray-300 rounded px-1 outline-none bg-white h-7">
+                    <option value="3">Normal</option>
+                    <option value="1">Pequeno</option>
+                    <option value="5">Grande</option>
+                    <option value="7">Enorme</option>
+                </select>
+            </div>
+            <div 
+                ref={editorRef}
+                contentEditable
+                className="flex-1 p-4 outline-none overflow-y-auto text-sm"
+                onInput={(e) => onChange(e.currentTarget.innerHTML)}
+                dangerouslySetInnerHTML={{ __html: value }}
+                style={{ minHeight: '200px' }}
+            ></div>
+        </div>
+    );
+};
 
 const EmailClient: React.FC = () => {
   const [activeBox, setActiveBox] = useState<'INBOX' | 'Sent'>('INBOX');
   const [emails, setEmails] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  
+  // Reading State
   const [readingEmail, setReadingEmail] = useState<any | null>(null);
   const [loadingContent, setLoadingContent] = useState(false);
-  const [composing, setComposing] = useState(false);
+  const [showReadModal, setShowReadModal] = useState(false);
 
   // Compose State
+  const [composing, setComposing] = useState(false);
   const [to, setTo] = useState('');
   const [subject, setSubject] = useState('');
-  const [body, setBody] = useState('');
+  const [bodyHtml, setBodyHtml] = useState('<div><br></div>'); // Start empty div
   const [attachments, setAttachments] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
 
@@ -25,7 +65,7 @@ const EmailClient: React.FC = () => {
       setEmails(data);
     } catch (e) {
       console.error(e);
-      alert("Erro ao buscar e-mails. Verifique se o servidor suporta IMAP.");
+      alert("Erro ao buscar e-mails.");
     } finally {
       setLoading(false);
     }
@@ -37,15 +77,28 @@ const EmailClient: React.FC = () => {
 
   const handleReadEmail = async (email: any) => {
     setLoadingContent(true);
+    setShowReadModal(true);
     try {
       const fullContent = await api.getEmailContent(email.id, activeBox);
       setReadingEmail({ ...email, ...fullContent });
     } catch (e) {
       console.error(e);
       alert("Erro ao carregar conteúdo do e-mail.");
+      setShowReadModal(false);
     } finally {
       setLoadingContent(false);
     }
+  };
+
+  const handleNavigateEmail = (direction: 'prev' | 'next') => {
+      if (!readingEmail) return;
+      const currentIndex = emails.findIndex(e => e.id === readingEmail.id);
+      if (currentIndex === -1) return;
+
+      const nextIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1;
+      if (nextIndex >= 0 && nextIndex < emails.length) {
+          handleReadEmail(emails[nextIndex]);
+      }
   };
 
   const handleAttachmentChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -61,9 +114,7 @@ const EmailClient: React.FC = () => {
     const formData = new FormData();
     formData.append('to', to);
     formData.append('subject', subject);
-    // Simples conversão de quebra de linha para HTML BR para envio básico
-    const htmlBody = body.replace(/\n/g, '<br>');
-    formData.append('htmlBody', htmlBody);
+    formData.append('htmlBody', bodyHtml);
     
     attachments.forEach(file => {
       formData.append('attachments', file);
@@ -71,13 +122,13 @@ const EmailClient: React.FC = () => {
 
     try {
       await api.sendEmailDirect(formData);
-      alert("E-mail enviado com sucesso e salvo em Itens Enviados!");
+      alert("E-mail enviado com sucesso e registrado no sistema!");
       setComposing(false);
       setTo('');
       setSubject('');
-      setBody('');
+      setBodyHtml('<div><br></div>');
       setAttachments([]);
-      if (activeBox === 'Sent') fetchEmails(); // Refresh se estiver na caixa de saída
+      if (activeBox === 'Sent') fetchEmails();
     } catch (error: any) {
       alert("Erro ao enviar: " + error.message);
     } finally {
@@ -86,7 +137,7 @@ const EmailClient: React.FC = () => {
   };
 
   const renderSidebar = () => (
-    <div className="w-64 bg-gray-50 border-r border-gray-200 flex flex-col h-full">
+    <div className="w-64 bg-gray-50 border-r border-gray-200 flex flex-col h-full flex-shrink-0">
       <div className="p-4">
         <button 
           onClick={() => setComposing(true)}
@@ -109,146 +160,142 @@ const EmailClient: React.FC = () => {
           className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium transition-colors ${activeBox === 'Sent' ? 'bg-indigo-50 text-indigo-700' : 'text-gray-700 hover:bg-gray-100'}`}
         >
           <div className="flex items-center gap-3">
-            <Send className="w-4 h-4" /> Enviados
+            <Send className="w-4 h-4" /> Enviados (Sistema)
           </div>
         </button>
       </nav>
     </div>
   );
 
-  const renderEmailList = () => (
-    <div className={`flex-1 flex flex-col h-full bg-white ${readingEmail ? 'hidden md:flex md:w-1/3 md:border-r' : 'w-full'}`}>
-      <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-white sticky top-0 z-10">
-        <h2 className="font-bold text-gray-800 text-lg flex items-center gap-2">
-            {activeBox === 'INBOX' ? 'Entrada' : 'Enviados'}
-            {loading && <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />}
-        </h2>
-        <button onClick={fetchEmails} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full" title="Atualizar">
-          <RefreshCw className="w-4 h-4" />
-        </button>
-      </div>
+  return (
+    <div className="h-[calc(100vh-100px)] -m-6 flex bg-white border-t border-gray-200">
+      {renderSidebar()}
       
-      <div className="flex-1 overflow-y-auto">
-        {emails.length === 0 && !loading && (
-            <div className="p-8 text-center text-gray-400">
-                A pasta está vazia.
+      {/* Email List - Full Width */}
+      <div className="flex-1 flex flex-col h-full bg-white">
+        <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-white sticky top-0 z-10">
+            <h2 className="font-bold text-gray-800 text-lg flex items-center gap-2">
+                {activeBox === 'INBOX' ? 'Caixa de Entrada' : 'E-mails Disparados pelo Sistema'}
+                {loading && <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />}
+            </h2>
+            <button onClick={fetchEmails} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full" title="Atualizar">
+                <RefreshCw className="w-4 h-4" />
+            </button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+            {emails.length === 0 && !loading && (
+                <div className="p-10 text-center text-gray-400 flex flex-col items-center">
+                    <Mail className="w-12 h-12 mb-2 opacity-20" />
+                    <p>Nenhum e-mail encontrado.</p>
+                </div>
+            )}
+            {emails.map((email) => (
+            <div 
+                key={email.id}
+                onClick={() => handleReadEmail(email)}
+                className="p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors flex justify-between items-center"
+            >
+                <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-3 mb-1">
+                        <span className={`font-semibold text-sm truncate max-w-[200px] ${activeBox === 'INBOX' ? 'text-gray-800' : 'text-indigo-700'}`}>
+                            {email.from}
+                        </span>
+                        <span className="text-xs text-gray-400">
+                            {new Date(email.date).toLocaleString()}
+                        </span>
+                    </div>
+                    <div className="font-medium text-sm text-gray-700 truncate">
+                        {email.subject}
+                    </div>
+                </div>
             </div>
-        )}
-        {emails.map((email) => (
-          <div 
-            key={email.id}
-            onClick={() => handleReadEmail(email)}
-            className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors ${readingEmail?.id === email.id ? 'bg-indigo-50 border-l-4 border-l-indigo-500' : ''}`}
-          >
-            <div className="flex justify-between items-start mb-1">
-              <span className="font-semibold text-gray-800 text-sm truncate w-2/3">
-                  {email.from}
-              </span>
-              <span className="text-xs text-gray-500">
-                  {new Date(email.date).toLocaleDateString()}
-              </span>
-            </div>
-            <div className="font-medium text-sm text-gray-700 mb-1 truncate">
-                {email.subject}
-            </div>
-          </div>
-        ))}
+            ))}
+        </div>
       </div>
-    </div>
-  );
 
-  const renderEmailContent = () => {
-    if (!readingEmail && !loadingContent) {
-        return (
-            <div className="hidden md:flex flex-1 items-center justify-center bg-gray-50 text-gray-400 flex-col gap-4">
-                <Mail className="w-16 h-16 text-gray-300" />
-                <p>Selecione um e-mail para ler</p>
-            </div>
-        );
-    }
-
-    if (loadingContent) {
-        return (
-            <div className="flex-1 flex items-center justify-center bg-white">
-                <Loader2 className="w-10 h-10 animate-spin text-indigo-500" />
-            </div>
-        );
-    }
-
-    return (
-        <div className={`flex-1 flex flex-col h-full bg-white absolute inset-0 md:static z-20 ${!readingEmail ? 'hidden' : ''}`}>
-            <div className="p-4 border-b border-gray-200 flex items-center gap-3">
-                <button onClick={() => setReadingEmail(null)} className="md:hidden p-2 hover:bg-gray-100 rounded-full">
-                    <ChevronLeft className="w-5 h-5" />
-                </button>
-                <div className="flex-1">
-                    <h2 className="text-xl font-bold text-gray-800">{readingEmail.subject}</h2>
-                </div>
-            </div>
-            
-            <div className="p-6 overflow-y-auto flex-1">
-                <div className="flex justify-between items-start mb-6 pb-6 border-b border-gray-100">
-                    <div>
-                        <div className="font-bold text-gray-800 text-lg">{readingEmail.from}</div>
-                        <div className="text-sm text-gray-500">Para: {readingEmail.to}</div>
+      {/* Read Modal */}
+      {showReadModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl w-full max-w-4xl h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
+                {/* Header with Navigation */}
+                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-xl">
+                    <div className="flex gap-2">
+                        <button onClick={() => handleNavigateEmail('prev')} className="p-1.5 hover:bg-white rounded border border-transparent hover:border-gray-300 text-gray-600 transition-all" title="Anterior"><ChevronLeft className="w-5 h-5" /></button>
+                        <button onClick={() => handleNavigateEmail('next')} className="p-1.5 hover:bg-white rounded border border-transparent hover:border-gray-300 text-gray-600 transition-all" title="Próximo"><ChevronRight className="w-5 h-5" /></button>
                     </div>
-                    <div className="text-sm text-gray-500 text-right">
-                        {new Date(readingEmail.date).toLocaleString()}
-                    </div>
+                    <h3 className="font-bold text-gray-700">Visualização de Mensagem</h3>
+                    <button onClick={() => { setShowReadModal(false); setReadingEmail(null); }} className="text-gray-400 hover:text-gray-600 p-1 hover:bg-white rounded-full">
+                        <X className="w-6 h-6" />
+                    </button>
                 </div>
 
-                <div 
-                    className="prose max-w-none text-gray-800 text-sm"
-                    dangerouslySetInnerHTML={{ __html: readingEmail.html || readingEmail.textAsHtml || readingEmail.text || '' }}
-                />
-
-                {readingEmail.attachments && readingEmail.attachments.length > 0 && (
-                    <div className="mt-8 pt-4 border-t border-gray-100">
-                        <h4 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
-                            <Paperclip className="w-4 h-4" /> Anexos ({readingEmail.attachments.length})
-                        </h4>
-                        <div className="flex flex-wrap gap-2">
-                            {readingEmail.attachments.map((att: any, idx: number) => (
-                                <div key={idx} className="flex items-center gap-2 bg-gray-100 px-3 py-2 rounded-lg text-sm border border-gray-200">
-                                    <File className="w-4 h-4 text-gray-500" />
-                                    <span className="truncate max-w-[150px]">{att.filename}</span>
-                                    <span className="text-xs text-gray-400">({Math.round(att.size / 1024)} KB)</span>
-                                    {att.content && (
-                                        <a 
-                                            href={`data:${att.contentType};base64,${att.content}`} 
-                                            download={att.filename}
-                                            className="text-indigo-600 hover:underline text-xs font-bold ml-2"
-                                        >
-                                            Baixar
-                                        </a>
-                                    )}
+                {loadingContent || !readingEmail ? (
+                    <div className="flex-1 flex items-center justify-center">
+                        <Loader2 className="w-10 h-10 animate-spin text-indigo-500" />
+                    </div>
+                ) : (
+                    <div className="flex-1 overflow-y-auto p-8 bg-white">
+                        <div className="border-b border-gray-100 pb-6 mb-6">
+                            <h1 className="text-2xl font-bold text-gray-900 mb-4">{readingEmail.subject}</h1>
+                            <div className="flex justify-between items-start">
+                                <div>
+                                    <div className="font-semibold text-gray-800 text-lg">{readingEmail.from}</div>
+                                    <div className="text-sm text-gray-500">Para: {readingEmail.to}</div>
                                 </div>
-                            ))}
+                                <div className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
+                                    {new Date(readingEmail.date).toLocaleString()}
+                                </div>
+                            </div>
                         </div>
+
+                        <div 
+                            className="prose max-w-none text-gray-800"
+                            dangerouslySetInnerHTML={{ __html: readingEmail.html || readingEmail.text || '' }}
+                        />
+
+                        {readingEmail.attachments && readingEmail.attachments.length > 0 && (
+                            <div className="mt-8 pt-4 border-t border-gray-100">
+                                <h4 className="text-sm font-bold text-gray-700 mb-3 flex items-center gap-2">
+                                    <Paperclip className="w-4 h-4" /> Anexos ({readingEmail.attachments.length})
+                                </h4>
+                                <div className="flex flex-wrap gap-2">
+                                    {readingEmail.attachments.map((att: any, idx: number) => (
+                                        <div key={idx} className="flex items-center gap-2 bg-gray-100 px-3 py-2 rounded-lg text-sm border border-gray-200">
+                                            <File className="w-4 h-4 text-gray-500" />
+                                            <span className="truncate max-w-[150px]">{att.filename}</span>
+                                            <span className="text-xs text-gray-400">({att.size ? Math.round(att.size / 1024) + ' KB' : 'N/A'})</span>
+                                            {att.content && (
+                                                <a 
+                                                    href={`data:${att.contentType};base64,${att.content}`} 
+                                                    download={att.filename}
+                                                    className="text-indigo-600 hover:underline text-xs font-bold ml-2"
+                                                >
+                                                    Baixar
+                                                </a>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
         </div>
-    );
-  };
+      )}
 
-  return (
-    <div className="h-[calc(100vh-100px)] -m-6 flex bg-white border-t border-gray-200">
-      {renderSidebar()}
-      {renderEmailList()}
-      {renderEmailContent()}
-
+      {/* Compose Modal */}
       {composing && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-xl w-full max-w-2xl h-[80vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="bg-white rounded-xl w-full max-w-3xl h-[85vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200">
                 <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-xl">
                     <h3 className="font-bold text-gray-800">Nova Mensagem</h3>
                     <button onClick={() => setComposing(false)} className="text-gray-400 hover:text-gray-600 p-1 hover:bg-gray-200 rounded-full">
                         <X className="w-5 h-5" />
                     </button>
                 </div>
-                <form onSubmit={handleSendEmail} className="flex-1 flex flex-col">
-                    <div className="p-4 space-y-4 flex-1 overflow-y-auto">
+                <form onSubmit={handleSendEmail} className="flex-1 flex flex-col overflow-hidden">
+                    <div className="p-4 space-y-4 flex-1 flex flex-col overflow-hidden">
                         <input 
                             type="email" 
                             placeholder="Para" 
@@ -265,12 +312,10 @@ const EmailClient: React.FC = () => {
                             onChange={e => setSubject(e.target.value)}
                             required
                         />
-                        <textarea 
-                            className="w-full h-full min-h-[200px] resize-none outline-none mt-4 text-gray-700"
-                            placeholder="Escreva sua mensagem aqui..."
-                            value={body}
-                            onChange={e => setBody(e.target.value)}
-                        ></textarea>
+                        
+                        <div className="flex-1 overflow-hidden mt-2">
+                            <RichTextEditor value={bodyHtml} onChange={setBodyHtml} />
+                        </div>
                         
                         {attachments.length > 0 && (
                             <div className="flex flex-wrap gap-2 pt-2">
