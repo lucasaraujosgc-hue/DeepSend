@@ -94,4 +94,5 @@ export interface UserSettings {
   categoryRules: Record<string, CategoryRule>;
   dailySummaryNumber: string; // Número para receber o resumo das tarefas
   dailySummaryTime: string; // Horário do envio (ex: "08:00")
+  aiEnabled?: boolean; // Ativar/Desativar IA
 }

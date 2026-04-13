@@ -58,5 +58,6 @@ Lucas Araújo`,
     'Notas Fiscais': { day: 1, rule: 'fixo' }, 
   },
   dailySummaryNumber: '',
-  dailySummaryTime: '08:00'
+  dailySummaryTime: '08:00',
+  aiEnabled: true
 };

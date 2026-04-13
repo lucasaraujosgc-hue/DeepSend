@@ -594,6 +594,11 @@ const getWaClientWrapper = (username) => {
                     return; 
                 }
 
+                if (settings.aiEnabled === false) {
+                    log(`[AI Trigger] IA está desativada nas configurações.`);
+                    return;
+                }
+
                 log(`[AI Trigger] ACESSO PERMITIDO! Iniciando processamento IA...`);
 
                 let mediaPart = null;
