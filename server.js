@@ -233,6 +233,7 @@ const saveToImapSentFolder = async (mailOptions) => {
             port: imapPort,
             secure: imapSecure,
             auth: { user: emailUser, pass: emailPass },
+            tls: { rejectUnauthorized: false },
             logger: false // Desabilita logs extensos
         });
 
