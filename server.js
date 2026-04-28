@@ -204,8 +204,9 @@ const saveToImapSentFolder = async (mailOptions) => {
     try {
         const emailUser = process.env.EMAIL_USER;
         const emailPass = process.env.EMAIL_PASS;
+
         if (!emailUser || !emailPass) {
-            log("[IMAP] EMAIL_USER ou EMAIL_PASS não configurados. Ignorando cópia IMAP.");
+            log('[IMAP] EMAIL_USER e EMAIL_PASS não configurados. Ignorando IMAP.');
             return;
         }
 
@@ -213,9 +214,7 @@ const saveToImapSentFolder = async (mailOptions) => {
         const imapPort = parseInt(process.env.IMAP_PORT || '993');
         const imapSecure = process.env.IMAP_SECURE !== 'false';
 
-        log(`[IMAP] Conectando a ${imapHost}:${imapPort} para salvar nos Enviados usando imapflow...`);
-
-        // Gera o MIME completo usando o streamTransport
+        // Gera o MIME completo
         const mimePreview = nodemailer.createTransport({
             streamTransport: true,
             buffer: true,
@@ -234,7 +233,7 @@ const saveToImapSentFolder = async (mailOptions) => {
             secure: imapSecure,
             auth: { user: emailUser, pass: emailPass },
             tls: { rejectUnauthorized: false },
-            logger: false // Desabilita logs extensos
+            logger: false
         });
 
         await imap.connect();
@@ -245,8 +244,8 @@ const saveToImapSentFolder = async (mailOptions) => {
         });
         await imap.logout();
         log(`[IMAP] Email salvo na pasta ${sentFolder} com sucesso.`);
-    } catch (e) {
-        log(`[IMAP Error] Erro ao salvar na pasta de enviados: ${e.message}`);
+    } catch (err) {
+        log(`[IMAP Error] Erro ao salvar na pasta de enviados: ${err.message}`);
     }
 };
 
