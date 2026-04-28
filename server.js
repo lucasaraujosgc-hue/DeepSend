@@ -12,6 +12,8 @@ import fs from 'fs';
 import sqlite3 from 'sqlite3';
 import multer from 'multer';
 import nodemailer from 'nodemailer';
+import imaps from 'imap-simple';
+import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 import { GoogleGenAI, Type } from "@google/genai";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -190,6 +192,87 @@ const emailTransporter = nodemailer.createTransport({
     secure: emailPort === 465,
     auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
 });
+
+const saveToImapSentFolder = async (mailOptions) => {
+    try {
+        const emailUser = process.env.EMAIL_USER;
+        const emailPass = process.env.EMAIL_PASS;
+        if (!emailUser || !emailPass) {
+            log("[IMAP] EMAIL_USER ou EMAIL_PASS não configurados. Ignorando cópia IMAP.");
+            return;
+        }
+
+        const imapHost = process.env.IMAP_HOST || process.env.EMAIL_HOST || 'imap.gmail.com';
+        const imapPort = parseInt(process.env.IMAP_PORT || '993');
+        const imapTls = process.env.IMAP_TLS !== 'false';
+
+        log(`[IMAP] Conectando a ${imapHost}:${imapPort} para salvar nos Enviados...`);
+
+        const config = {
+            imap: {
+                user: emailUser,
+                password: emailPass,
+                host: imapHost,
+                port: imapPort,
+                tls: imapTls,
+                authTimeout: 10000,
+                tlsOptions: { rejectUnauthorized: false }
+            }
+        };
+
+        const connection = await imaps.connect(config);
+
+        const boxes = await connection.getBoxes();
+        let sentFolder = null;
+        
+        const commonSentNames = ['[gmail]/sent mail', '[gmail]/enviados', 'sent', 'sent items', 'enviados', 'itens enviados', 'sent messages', 'inbox.sent'];
+        
+        const findSentBox = (currentBoxes, pathPrefix = '') => {
+            for (let [boxName, boxDetails] of Object.entries(currentBoxes)) {
+                const lowerName = boxName.toLowerCase();
+                const fullPath = pathPrefix ? `${pathPrefix}${boxDetails.delimiter}${boxName}` : boxName;
+                const lowerFullPath = fullPath.toLowerCase();
+
+                if (boxDetails.attribs && boxDetails.attribs.some(a => a.toLowerCase() === '\\sent')) {
+                    return fullPath;
+                }
+                if (commonSentNames.includes(lowerFullPath) || commonSentNames.includes(lowerName)) {
+                    return fullPath;
+                }
+                
+                if (boxDetails.children) {
+                    const childMatch = findSentBox(boxDetails.children, fullPath);
+                    if (childMatch) return childMatch;
+                }
+            }
+            return null;
+        }
+        
+        sentFolder = findSentBox(boxes);
+        
+        if (!sentFolder) {
+            sentFolder = 'Sent';
+            log(`[IMAP] Pasta de enviados não detectada automaticamente, usando fallback: '${sentFolder}'`);
+        } else {
+            log(`[IMAP] Pasta de enviados detectada: ${sentFolder}`);
+        }
+
+        const mail = new MailComposer(mailOptions);
+        const rawMessage = await new Promise((resolve, reject) => {
+            mail.compile().build((err, msg) => {
+                if (err) reject(err);
+                else resolve(msg.toString());
+            });
+        });
+
+        await connection.append(rawMessage, { mailbox: sentFolder, flags: ['\\Seen'] });
+        log(`[IMAP] Email salvo em ${sentFolder} com sucesso.`);
+        
+        connection.end();
+    } catch (e) {
+        log(`[IMAP Error] Erro ao salvar na pasta de enviados: ${e.message}`);
+    }
+};
 
 // --- AI LOGIC: Tools & Handler ---
 
@@ -376,14 +459,16 @@ const executeTool = async (name, args, db, username) => {
                 if (channels.email && company.email) {
                     try {
                         const emailList = company.email.split(',').map(e => e.trim());
-                        await emailTransporter.sendMail({
+                        const mailOptions = {
                             from: process.env.EMAIL_USER,
                             to: emailList[0],
                             cc: emailList.slice(1),
                             subject: "Comunicado Contabilidade",
                             text: args.message_body, 
                             html: buildEmailHtml(args.message_body, [], "Atenciosamente,\nContabilidade")
-                        });
+                        };
+                        await emailTransporter.sendMail(mailOptions);
+                        saveToImapSentFolder(mailOptions); // Fire and forget para não bloquear a resposta da IA
                         logMsg.push("E-mail enviado");
                     } catch (e) { logMsg.push("Falha no E-mail"); }
                 }
@@ -1063,14 +1148,16 @@ app.post('/api/send-documents', async (req, res) => {
                         const senderEmail = process.env.EMAIL_FROM_EMAIL || process.env.EMAIL_USER;
                         const fromAddress = `"${senderName}" <${senderEmail}>`;
 
-                        await emailTransporter.sendMail({
+                        const mailOptions = {
                             from: fromAddress,
                             to: mainEmail,
                             cc: ccEmails, 
                             subject: finalSubject,
                             html: finalHtml,
                             attachments: validAttachments.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
-                        });
+                        };
+                        await emailTransporter.sendMail(mailOptions);
+                        saveToImapSentFolder(mailOptions);
                         log(`[Email] Enviado para ${company.name} (${mainEmail})`);
                     }
                 } catch (e) { 
@@ -1246,14 +1333,16 @@ setInterval(() => {
                                         const senderEmail = process.env.EMAIL_FROM_EMAIL || process.env.EMAIL_USER;
                                         const fromAddress = `"${senderName}" <${senderEmail}>`;
 
-                                        await emailTransporter.sendMail({
+                                        const mailOptions = {
                                             from: fromAddress,
                                             to: mainEmail,
                                             cc: ccEmails,
                                             subject: msg.title,
                                             html: htmlContent,
                                             attachments: attachmentsToSend.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
-                                        });
+                                        };
+                                        await emailTransporter.sendMail(mailOptions);
+                                        saveToImapSentFolder(mailOptions);
                                     }
                                } catch(e) { log(`[CRON] Erro email ${company.name}`, e); }
                             }
