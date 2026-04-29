@@ -193,6 +193,12 @@ const emailTransporter = nodemailer.createTransport({
 });
 
 const pickSentMailbox = async (imap) => {
+    // Se configurada manualmente, usa direto
+    if (process.env.SENT_FOLDER) {
+        log(`[IMAP] Usando pasta configurada: ${process.env.SENT_FOLDER}`);
+        return process.env.SENT_FOLDER;
+    }
+
     const candidates = new Set(['Sent', 'Sent Items', 'Enviados', 'INBOX.Sent', '[Gmail]/Sent Mail']);
     for await (const box of imap.list()) {
         if (candidates.has(box.path) || candidates.has(box.name)) return box.path;
@@ -443,7 +449,9 @@ const executeTool = async (name, args, db, username) => {
                             html: buildEmailHtml(args.message_body, [], "Atenciosamente,\nContabilidade")
                         };
                         await emailTransporter.sendMail(mailOptions);
-                        saveToImapSentFolder(mailOptions); // Fire and forget para não bloquear a resposta da IA
+                        await saveToImapSentFolder(mailOptions).catch(err => 
+                            log('[send-documents] Falha ao salvar no IMAP', err)
+                        );
                         logMsg.push("E-mail enviado");
                     } catch (e) { logMsg.push("Falha no E-mail"); }
                 }
@@ -1132,7 +1140,9 @@ app.post('/api/send-documents', async (req, res) => {
                             attachments: validAttachments.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
                         };
                         await emailTransporter.sendMail(mailOptions);
-                        saveToImapSentFolder(mailOptions);
+                        await saveToImapSentFolder(mailOptions).catch(err => 
+                            log('[Email] Falha ao salvar no IMAP', err)
+                        );
                         log(`[Email] Enviado para ${company.name} (${mainEmail})`);
                     }
                 } catch (e) { 
@@ -1317,7 +1327,9 @@ setInterval(() => {
                                             attachments: attachmentsToSend.map(a => ({ filename: a.filename, path: a.path, contentType: a.contentType }))
                                         };
                                         await emailTransporter.sendMail(mailOptions);
-                                        saveToImapSentFolder(mailOptions);
+                                        await saveToImapSentFolder(mailOptions).catch(err => 
+                                            log('[CRON] Falha ao salvar no IMAP', err)
+                                        );
                                     }
                                } catch(e) { log(`[CRON] Erro email ${company.name}`, e); }
                             }
