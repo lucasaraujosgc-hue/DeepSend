@@ -226,9 +226,9 @@ const saveToImapSentFolder = async (mailOptions) => {
             return;
         }
 
-        const imapHost = process.env.IMAP_HOST || process.env.EMAIL_HOST || 'imap.hostinger.com';
+        const imapHost = process.env.IMAP_HOST || 'imap.hostinger.com';
         const imapPort = parseInt(process.env.IMAP_PORT || '993');
-        const imapSecure = process.env.IMAP_SECURE !== 'false';
+        const imapSecure = process.env.IMAP_SECURE !== 'true';
 
         // Gera o MIME completo
         const mimePreview = nodemailer.createTransport({
