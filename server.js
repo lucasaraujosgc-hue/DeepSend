@@ -271,10 +271,7 @@ const saveToImapSentFolder = async (mailOptions) => {
 
         const sentFolder = await pickOrCreateSentMailbox(imap);
         const rawMessage = Buffer.from(mime.message.toString(), 'utf-8');
-        await imap.append(sentFolder, rawMessage, {
-            flags: ['\\Seen'],
-            internalDate: new Date(),
-        });
+        await imap.append(sentFolder, rawMessage);
 
         log(`[IMAP] Email salvo na pasta ${sentFolder} com sucesso.`);
     } catch (err) {
