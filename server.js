@@ -270,7 +270,10 @@ const saveToImapSentFolder = async (mailOptions) => {
         await imap.connect();
 
         const sentFolder = await pickOrCreateSentMailbox(imap);
-        await imap.append(sentFolder, mime.message, {
+        const rawMessage = Buffer.isBuffer(mime.message)
+            ? mime.message
+            : Buffer.from(mime.message);
+        await imap.append(sentFolder, rawMessage, {
             flags: ['\\Seen'],
             internalDate: new Date(),
         });
