@@ -192,31 +192,48 @@ const emailTransporter = nodemailer.createTransport({
     auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
 });
 
-const pickSentMailbox = async (imap) => {
-    // Se configurada manualmente, usa direto
+const pickOrCreateSentMailbox = async (imap) => {
     if (process.env.SENT_FOLDER) {
         log(`[IMAP] Usando pasta configurada: ${process.env.SENT_FOLDER}`);
         return process.env.SENT_FOLDER;
     }
 
-    for await (const box of imap.list()) {
-        const name = (box.name || '').toLowerCase();
-        const path = (box.path || '').toLowerCase();
+    const candidates = [
+        'Sent',
+        'Sent Items',
+        'Enviados',
+        'INBOX.Sent',
+        'INBOX.Enviados',
+        '[Gmail]/Sent Mail',
+    ];
 
-        if (
-            name.includes('sent') ||
-            name.includes('enviad') ||
-            path.includes('sent') ||
-            path.includes('enviad')
-        ) {
-            return box.path;
+    const findMailbox = async () => {
+        for await (const box of imap.list()) {
+            if (candidates.includes(box.path) || candidates.includes(box.name)) {
+                return box.path;
+            }
+        }
+        return null;
+    };
+
+    let folder = await findMailbox();
+    if (folder) return folder;
+
+    for (const name of ['Sent', 'Enviados']) {
+        try {
+            await imap.mailboxCreate(name);
+            folder = await findMailbox();
+            if (folder) return folder;
+        } catch (e) {
+            // tenta o próximo nome
         }
     }
 
-    return 'INBOX.Sent'; // fallback melhor
+    return 'Sent';
 };
 
 const saveToImapSentFolder = async (mailOptions) => {
+    let imap;
     try {
         const emailUser = process.env.EMAIL_USER;
         const emailPass = process.env.EMAIL_PASS;
@@ -228,9 +245,8 @@ const saveToImapSentFolder = async (mailOptions) => {
 
         const imapHost = process.env.IMAP_HOST || 'imap.hostinger.com';
         const imapPort = parseInt(process.env.IMAP_PORT || '993');
-        const imapSecure = process.env.IMAP_SECURE !== 'true';
+        const imapSecure = process.env.IMAP_SECURE !== 'false';
 
-        // Gera o MIME completo
         const mimePreview = nodemailer.createTransport({
             streamTransport: true,
             buffer: true,
@@ -245,25 +261,30 @@ const saveToImapSentFolder = async (mailOptions) => {
             html: mailOptions.html || '<p></p>',
         });
 
-        const imap = new ImapFlow({
+        imap = new ImapFlow({
             host: imapHost,
             port: imapPort,
             secure: imapSecure,
-            auth: { user: emailUser, pass: emailPass },
+            auth: {
+                user: emailUser,
+                pass: emailPass,
+            },
             tls: { rejectUnauthorized: false },
-            logger: false
         });
 
         await imap.connect();
-        const sentFolder = await pickSentMailbox(imap);
+
+        const sentFolder = await pickOrCreateSentMailbox(imap);
         await imap.append(sentFolder, mime.message, {
-            flags: ['\\Seen']
+            flags: ['\\Seen'],
+            internalDate: new Date(),
         });
-        await imap.logout();
+
         log(`[IMAP] Email salvo na pasta ${sentFolder} com sucesso.`);
     } catch (err) {
         log(`[IMAP Error] ${err.message}`, err);
-        console.error(err);
+    } finally {
+        if (imap) await imap.logout().catch(() => {});
     }
 };
 
