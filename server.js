@@ -199,11 +199,21 @@ const pickSentMailbox = async (imap) => {
         return process.env.SENT_FOLDER;
     }
 
-    const candidates = new Set(['Sent', 'Sent Items', 'Enviados', 'INBOX.Sent', '[Gmail]/Sent Mail']);
     for await (const box of imap.list()) {
-        if (candidates.has(box.path) || candidates.has(box.name)) return box.path;
+        const name = (box.name || '').toLowerCase();
+        const path = (box.path || '').toLowerCase();
+
+        if (
+            name.includes('sent') ||
+            name.includes('enviad') ||
+            path.includes('sent') ||
+            path.includes('enviad')
+        ) {
+            return box.path;
+        }
     }
-    return 'Sent';
+
+    return 'INBOX.Sent'; // fallback melhor
 };
 
 const saveToImapSentFolder = async (mailOptions) => {
@@ -231,6 +241,8 @@ const saveToImapSentFolder = async (mailOptions) => {
             ...mailOptions,
             from: mailOptions.from || emailUser,
             date: new Date(),
+            text: mailOptions.text || ' ',
+            html: mailOptions.html || '<p></p>',
         });
 
         const imap = new ImapFlow({
@@ -245,13 +257,13 @@ const saveToImapSentFolder = async (mailOptions) => {
         await imap.connect();
         const sentFolder = await pickSentMailbox(imap);
         await imap.append(sentFolder, mime.message, {
-            flags: ['\\Seen'],
-            internalDate: new Date(),
+            flags: ['\\Seen']
         });
         await imap.logout();
         log(`[IMAP] Email salvo na pasta ${sentFolder} com sucesso.`);
     } catch (err) {
-        log(`[IMAP Error] Erro ao salvar na pasta de enviados: ${err.message}`);
+        log(`[IMAP Error] ${err.message}`, err);
+        console.error(err);
     }
 };
 
