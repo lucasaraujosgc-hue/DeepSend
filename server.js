@@ -200,11 +200,6 @@ const pickOrCreateSentMailbox = async (imap) => {
 
     const candidates = [
         'Sent',
-        'Sent Items',
-        'Enviados',
-        'INBOX.Sent',
-        'INBOX.Enviados',
-        '[Gmail]/Sent Mail',
     ];
 
     const findMailbox = async () => {
