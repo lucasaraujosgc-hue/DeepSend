@@ -199,7 +199,7 @@ const pickOrCreateSentMailbox = async (imap) => {
     }
 
     const candidates = [
-        'Sent',
+        'INBOX.Sent',
     ];
 
     const findMailbox = async () => {
