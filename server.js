@@ -265,6 +265,7 @@ const saveToImapSentFolder = async (mailOptions) => {
                 pass: emailPass,
             },
             tls: { rejectUnauthorized: false },
+            logger: false,
         });
 
         await imap.connect();
